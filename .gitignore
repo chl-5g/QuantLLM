@@ -1,0 +1,15 @@
+# 大型数据目录（不上传）
+ashare/
+output/
+github-repos/
+BAAI_IndustryInstruction_Finance-Economics/
+finance-instruct-500k/
+unsloth_compiled_cache/
+
+# 大型训练数据文件
+merged_train.jsonl
+quant-github-generated.jsonl
+
+# Python
+__pycache__/
+*.pyc
