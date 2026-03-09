@@ -6,9 +6,10 @@ BAAI_IndustryInstruction_Finance-Economics/
 finance-instruct-500k/
 unsloth_compiled_cache/
 
-# 大型训练数据文件
+# 训练数据文件
 merged_train.jsonl
 quant-github-generated.jsonl
+quant-trading-instruct/
 
 # Python
 __pycache__/
