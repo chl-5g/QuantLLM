@@ -22,28 +22,24 @@
 ```
 /tmp/training-data/
 ├── README.md                          # 本文件
-├── train.py                           # QLoRA 微调训练脚本
-├── prepare_dataset.py                 # 数据集加载/预处理
-├── generate_training_data.py          # 用大模型批量生成训练对
-├── crawl_ashare.py                    # A股数据爬取（akshare）
-├── convert_ashare_to_training.py      # A股数据 → 训练JSONL
-├── merged_train.jsonl                 # 合并后训练集（30101条）
-├── quant-github-generated.jsonl       # GitHub量化代码生成的训练对（55条）
-├── ashare/                            # A股爬取数据（4150只）
-│   ├── basic/                         # 基本面数据
-│   ├── advanced/                      # 进阶数据
-│   └── progress.json                  # 爬取进度
-├── github-repos/                      # 量化策略代码仓库
-│   ├── backtesting.py-master/
-│   ├── QuantsPlaybook/
-│   └── quant-trading-master/
-├── BAAI_IndustryInstruction_Finance-Economics/  # BAAI金融经济指令数据集
-├── finance-instruct-500k/             # 金融指令数据集（HuggingFace）
-├── quant-trading-instruct/            # 量化交易指令数据集
-└── output/
-    └── quant-qwen2.5-14b-lora/        # 首轮训练产出
-        ├── checkpoint-500/
-        └── checkpoint-1000/
+├── .gitignore
+├── run.sh                             # 自动化运行入口
+├── scripts/                           # Python 运行脚本
+│   ├── crawl_ashare.py                # A股数据爬取（akshare）
+│   ├── convert_ashare_to_training.py  # A股数据 → 训练JSONL
+│   ├── generate_training_data.py      # 用大模型批量生成训练对
+│   ├── prepare_dataset.py             # 数据集合并/预处理
+│   └── train.py                       # QLoRA 微调训练脚本
+├── data/                              # 训练数据集
+│   ├── merged_train.jsonl             # 合并后训练集（30101条）
+│   ├── quant-github-generated.jsonl   # GitHub量化代码生成的训练对（55条）
+│   └── quant-trading-instruct/        # 量化交易指令数据集
+├── ashare/                            # A股爬取数据（不上传git）
+├── github-repos/                      # 量化策略代码仓库（不上传git）
+├── BAAI_IndustryInstruction_Finance-Economics/  # 公开数据集（不上传git）
+├── finance-instruct-500k/             # 公开数据集（不上传git）
+├── output/                            # 模型产出（不上传git）
+└── unsloth_compiled_cache/            # 编译缓存（不上传git）
 ```
 
 ---
@@ -179,23 +175,18 @@
 
 ## 快速开始
 
-### 训练
 ```bash
-source /root/finetune-env/bin/activate
 cd /tmp/training-data
-python train.py
-```
 
-### 数据生成
-```bash
-# 爬取A股数据
-python crawl_ashare.py
+# 完整流程（爬取 → 转换 → 生成 → 合并 → 训练）
+./run.sh all
 
-# 转换为训练格式
-python convert_ashare_to_training.py
-
-# 用大模型生成训练对
-python generate_training_data.py
+# 或分步执行
+./run.sh crawl      # 爬取A股数据
+./run.sh convert    # 转换A股数据为训练格式
+./run.sh generate   # 用大模型生成GitHub训练对
+./run.sh merge      # 合并所有数据集
+./run.sh train      # QLoRA 微调训练
 ```
 
 ---

@@ -7,6 +7,7 @@ Qwen2.5-14B QLoRA 微调训练脚本
 """
 
 import json
+import os
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -20,8 +21,9 @@ from datasets import Dataset
 # ============================================================
 MODEL_NAME = "unsloth/Qwen2.5-14B-bnb-4bit"
 MAX_SEQ_LENGTH = 2048
-OUTPUT_DIR = "/tmp/training-data/output/quant-qwen2.5-14b-lora"
-DATA_FILE = "/tmp/training-data/merged_train.jsonl"
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+OUTPUT_DIR = os.path.join(PROJECT_ROOT, "output", "quant-qwen2.5-14b-lora")
+DATA_FILE = os.path.join(PROJECT_ROOT, "data", "merged_train.jsonl")
 
 # ============================================================
 # 1. 加载模型

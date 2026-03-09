@@ -20,8 +20,9 @@ from collections import defaultdict
 
 random.seed(42)
 
-INPUT_DIR = "/tmp/training-data/ashare/advanced"
-OUTPUT_FILE = "/tmp/training-data/ashare_train.jsonl"
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+INPUT_DIR = os.path.join(PROJECT_ROOT, "ashare", "advanced")
+OUTPUT_FILE = os.path.join(PROJECT_ROOT, "data", "ashare_train.jsonl")
 SYSTEM_PROMPT = "你是一个专业的量化交易专家，擅长技术分析、因子分析、趋势判断和风险管理。"
 
 # 每只股票最多生成的问答对数

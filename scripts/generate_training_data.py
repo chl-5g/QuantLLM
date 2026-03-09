@@ -13,7 +13,8 @@ import sys
 
 OLLAMA_URL = "http://127.0.0.1:11434/api/chat"
 MODEL = "qwen3:14b"
-OUTPUT_FILE = "/tmp/training-data/quant-github-generated.jsonl"
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+OUTPUT_FILE = os.path.join(PROJECT_ROOT, "data", "quant-github-generated.jsonl")
 
 # ============================================================
 # 第一步：收集策略代码文件
@@ -24,13 +25,13 @@ def collect_strategy_files():
     files = []
 
     # quant-trading: 每个 backtest 文件都是独立策略
-    base = "/tmp/training-data/github-repos/quant-trading-master"
+    base = os.path.join(PROJECT_ROOT, "github-repos", "quant-trading-master")
     for f in glob.glob(f"{base}/*.py"):
         if "backtest" in f.lower() or "pattern" in f.lower() or "vix" in f.lower():
             files.append(("quant-trading", f))
 
     # backtesting.py: examples 目录
-    base2 = "/tmp/training-data/github-repos/backtesting.py-master/doc/examples"
+    base2 = os.path.join(PROJECT_ROOT, "github-repos", "backtesting.py-master", "doc", "examples")
     for f in glob.glob(f"{base2}/*.py"):
         files.append(("backtesting.py", f))
 
