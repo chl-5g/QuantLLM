@@ -1,0 +1,46 @@
+{
+  "builder_name": "parquet",
+  "citation": "",
+  "config_name": "default",
+  "dataset_name": "quant-trading-instruct",
+  "dataset_size": 1479263,
+  "description": "",
+  "download_checksums": {
+    "hf://datasets/lumalik/Quant-Trading-Instruct@24eba86dbefd1e4aa321105e7ed8de39fcf21d41/data/train-00000-of-00001-35e07da1d2bd0d51.parquet": {
+      "num_bytes": 485412,
+      "checksum": null
+    }
+  },
+  "download_size": 485412,
+  "features": {
+    "context": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "answer": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "question": {
+      "dtype": "string",
+      "_type": "Value"
+    }
+  },
+  "homepage": "",
+  "license": "",
+  "size_in_bytes": 1964675,
+  "splits": {
+    "train": {
+      "name": "train",
+      "num_bytes": 1479263,
+      "num_examples": 386,
+      "dataset_name": "quant-trading-instruct"
+    }
+  },
+  "version": {
+    "version_str": "0.0.0",
+    "major": 0,
+    "minor": 0,
+    "patch": 0
+  }
+}
