@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================
 # QuantLLM 一键执行脚本
-# 用法: bash /tmp/quant-llm/run.sh [step]
+# 用法: bash /opt/quant-llm/run.sh [step]
 #
 # 不带参数：执行全部流程
 # 带参数：执行指定步骤

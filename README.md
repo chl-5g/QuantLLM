@@ -38,6 +38,9 @@ source /opt/quant-llm/finetune-env/bin/activate
 
 # 安装全部依赖
 pip install -r requirements.txt
+
+# 可选：使用锁定版本（确保完全一致的环境）
+# pip install -r requirements-lock.txt
 ```
 
 如需使用数据增强功能（`run.sh generate`），还需本地运行 [ollama](https://ollama.com/) 并拉取模型：
@@ -64,6 +67,7 @@ from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, DATA_DIR, OUTPUT_DIR
 ├── run.sh                             # 一键执行脚本（入口）
 ├── config.yaml                        # 中心化配置文件
 ├── requirements.txt                   # Python 依赖清单
+├── requirements-lock.txt              # 精确版本锁定
 ├── README.md                          # 本文件
 ├── LICENSE
 ├── .gitignore
@@ -72,8 +76,8 @@ from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, DATA_DIR, OUTPUT_DIR
 │   ├── _config.py                     #   配置加载器（所有脚本共用）
 │   ├── crawl_ashare.py                #   A股全量历史行情爬取
 │   ├── crawl_multi_market.py          #   期货+ETF+可转债行情爬取
-│   ├── generate_training_data.py      #   GitHub量化仓库 → 中文问答对（需ollama）
-│   ├── convert_ashare_to_training.py  #   A股行情 → 技术分析训练对
+│   ├── generate_training_data.py      #   GitHub量化仓库 → 中文问答对（需ollama，独立使用）
+│   ├── convert_ashare_to_training.py  #   A股行情 → 训练对（已被 convert_all 替代）
 │   ├── convert_all_to_training.py     #   全市场行情 → 训练对（A股+期货+ETF+转债）
 │   ├── prepare_dataset.py            #   合并多源指令数据为统一ChatML JSONL
 │   ├── fetch_fingpt_data.py          #   FinGPT A股预测数据 → ChatML
@@ -96,10 +100,10 @@ from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, DATA_DIR, OUTPUT_DIR
 │   ├── merged_train.jsonl             #   v1 指令数据 (~30k条)
 │   ├── quant-github-generated.jsonl   #   GitHub策略问答 (~55条)
 │   ├── all_market_train.jsonl         #   全市场行情训练对 (~10k条)
-│   ├── fingpt_forecaster.jsonl        #   FinGPT A股预测（数百条）
-│   ├── quant_calculations.jsonl       #   量化计算问答（~500条）
-│   ├── reasoning_enhanced.jsonl       #   推理链增强（~2000条）
-│   └── merged_train_v2.jsonl          #   最终训练集 (~40k+条)
+│   ├── fingpt_forecaster.jsonl        #   FinGPT 预测数据（1230条）
+│   ├── quant_calculations.jsonl       #   量化计算问答（需ollama生成，可选）
+│   ├── reasoning_enhanced.jsonl       #   推理链增强（需ollama生成，可选）
+│   └── merged_train_v2.jsonl          #   最终训练集（~39k条，含可选数据源后~43k+）
 │
 ├── output/                            # 模型输出
 │   ├── quant-qwen2.5-14b-lora/        #   LoRA适配器权重
@@ -144,7 +148,7 @@ from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, DATA_DIR, OUTPUT_DIR
 
 | 数据源 | 条数 | 方法 |
 |--------|------|------|
-| FinGPT A股预测 | 数百条 | HuggingFace 下载 + Llama2→ChatML 转换 |
+| FinGPT 预测数据 | 1230条 | HuggingFace 下载 + Llama2→ChatML 转换（道琼斯30） |
 | 量化计算种子扩展 | ~500条 | 60条手写种子 + qwen3:14b few-shot 扩展 |
 | 推理链增强 | ~2000条 | deepseek-r1:32b 为高质量记录添加 `<think>` 推理链 |
 
@@ -153,16 +157,14 @@ from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, DATA_DIR, OUTPUT_DIR
 | 数据源 | 条数 | 内容 |
 |--------|------|------|
 | BAAI 中文金融 | ~29,000 | 金融知识、投资分析 |
-| A股技术分析 | ≤5,000 | RSI/MACD/均线分析 |
-| 期货量价分析 | ≤2,000 | CTA策略、季节性统计 |
-| ETF配置分析 | ≤2,000 | 波动率、配置建议 |
-| 可转债分析 | ≤1,500 | 双低策略、价格区间 |
+| 多市场行情分析 | ~8,900 | A股/期货/ETF/可转债技术分析（含【市场】前缀） |
 | 英文量化指令 | 386 | 策略代码和回测 |
 | GitHub策略问答 | 55 | 高质量代码解读 |
-| FinGPT A股预测 | ~数百 | 沪深50股票趋势预测 |
-| 量化计算 | ~500 | 风险指标/期权定价/组合优化 |
-| 推理链增强 | ~2000 | 带 `<think>` 推理过程的高质量对 |
-| **合计** | **~43,000+** | |
+| FinGPT 预测数据 | 1,230 | 道琼斯30股票趋势预测（英文） |
+| 量化计算（可选） | ~500 | 风险指标/期权定价/组合优化（需ollama生成） |
+| 推理链增强（可选） | ~2,000 | 带 `<think>` 推理过程的高质量对（需ollama生成） |
+| **基础合计** | **~39,000** | **不含可选数据源** |
+| **完整合计** | **~41,500+** | **含可选数据源** |
 
 ### Step 4: 模型训练 (`run.sh train`)
 
