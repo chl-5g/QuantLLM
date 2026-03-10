@@ -277,18 +277,23 @@ print(tokenizer.decode(outputs[0], skip_special_tokens=True))
 | 风控层 | 独立于模型的硬编码规则（仓位上限、止损线、日亏损限制） |
 | 日志系统 | 完整记录每笔交易的输入/推理/决策/结果 |
 
-**模型输出格式**（约束为固定 JSON）：
+**模型输出格式**（0-100 交易评分制）：
+
+固定输入格式（`[MARKET_DATA]` `[POSITION]` `[PORTFOLIO]` 分段标记），输出结构化 JSON：
 
 ```json
 {
-  "action": "buy",
-  "symbol": "600519",
-  "reason": "RSI从超卖区回升至35，MACD底背离，5日均线拐头向上...",
-  "position_pct": 0.1,
-  "stop_loss_pct": -3,
-  "take_profit_pct": 8
+  "score": 75,
+  "reasons": ["RSI=58，动能偏强", "MACD金叉，短期偏多", "价格在20日均线上方"],
+  "risk_factors": ["近5日涨幅较大，注意获利回吐"]
 }
 ```
+
+**评分阈值**（可调）：
+- score ≥ 70 → 买入信号
+- 30 < score < 70 → 持仓/观望
+- score ≤ 30 → 卖出信号
+- 不同市场环境可调整阈值（牛市 60/40，熊市 80/20）
 
 **资金管理策略**：
 - 初始本金 A，目标净值 B = 2A（翻倍止盈）

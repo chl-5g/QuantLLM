@@ -571,6 +571,220 @@ def gen_trading_signal(symbol, market_label, row, prev_row=None):
 
 
 # ============================================================
+# 交易评分模板（0-100 分制，固定输入格式）
+# ============================================================
+
+def gen_trading_score(symbol, market_label, row, rows_context, prev_row=None):
+    """
+    生成交易评分训练样本（0-100分制）。
+    固定输入格式：[MARKET_DATA] [POSITION] [PORTFOLIO] 分段标记。
+    输出 JSON：score + reasons + risk_factors。
+    """
+    rsi = row["rsi_14"]
+    macd_hist = row["macd_histogram"]
+    macd_line = row["macd_line"]
+    signal_line = row["signal_line"]
+    above_ma = row["close"] > row["close_ma_20"]
+    change = calc_change_pct(row["close"], row["open"])
+    vol_ratio = row["volume"] / row["volume_ma_5"] if row["volume_ma_5"] > 0 else 1.0
+    ma_diff_pct = (row["close"] - row["close_ma_20"]) / row["close_ma_20"] * 100 if row["close_ma_20"] != 0 else 0
+
+    # 模拟持仓状态（随机生成，让模型学会处理有/无持仓的场景）
+    import hashlib
+    seed_val = int(hashlib.md5(f"{symbol}{row['date']}".encode()).hexdigest()[:8], 16)
+    rng = random.Random(seed_val)
+
+    holding = rng.random() < 0.4  # 40% 概率有持仓
+    if holding:
+        cost_offset = rng.uniform(-0.08, 0.08)
+        cost = round(row["close"] * (1 - cost_offset), 2)
+        pnl_pct = round((row["close"] - cost) / cost * 100, 2)
+        days_held = rng.randint(1, 30)
+        position_block = (
+            f"[POSITION]\n"
+            f"holding: true\n"
+            f"cost: {cost}\n"
+            f"pnl_pct: {pnl_pct:+.2f}%\n"
+            f"days_held: {days_held}\n"
+        )
+    else:
+        pnl_pct = 0
+        days_held = 0
+        position_block = (
+            f"[POSITION]\n"
+            f"holding: false\n"
+        )
+
+    cash_pct = round(rng.uniform(0.15, 0.85), 2)
+    total_assets = rng.choice([50000, 100000, 200000, 500000])
+
+    # 近5日趋势
+    if len(rows_context) >= 5:
+        recent_closes = [r["close"] for r in rows_context[-5:]]
+        trend_5d = (recent_closes[-1] - recent_closes[0]) / recent_closes[0] * 100 if recent_closes[0] != 0 else 0
+    else:
+        trend_5d = change
+
+    # ---- 固定格式输入 ----
+    question = (
+        f"[MARKET_DATA]\n"
+        f"symbol: {symbol}\n"
+        f"market: {market_label}\n"
+        f"date: {row['date']}\n"
+        f"close: {row['close']}\n"
+        f"change_pct: {change:+.2f}%\n"
+        f"trend_5d: {trend_5d:+.2f}%\n"
+        f"rsi_14: {rsi}\n"
+        f"macd_histogram: {macd_hist}\n"
+        f"macd_cross: {'金叉' if macd_line > signal_line else '死叉'}\n"
+        f"above_ma20: {'true' if above_ma else 'false'}\n"
+        f"ma20_diff_pct: {ma_diff_pct:+.1f}%\n"
+        f"volume_ratio: {vol_ratio:.2f}\n"
+        f"{position_block}"
+        f"[PORTFOLIO]\n"
+        f"total_assets: {total_assets}\n"
+        f"cash_pct: {cash_pct}\n"
+        f"[END]\n"
+        f"请输出交易评分(0-100)和理由。"
+    )
+
+    # ---- 评分逻辑（覆盖全分段） ----
+    score = 50  # 基准分
+    reasons = []
+    risk_factors = []
+
+    # RSI 贡献 (±20)
+    if rsi >= 80:
+        score -= 20
+        reasons.append(f"RSI={rsi}，严重超买")
+        risk_factors.append("超买回调风险极高")
+    elif rsi >= 70:
+        score -= 12
+        reasons.append(f"RSI={rsi}，超买区域")
+        risk_factors.append("短期有回调压力")
+    elif rsi >= 55:
+        score += 5
+        reasons.append(f"RSI={rsi}，动能偏强")
+    elif rsi >= 45:
+        pass  # 中性不加分
+    elif rsi >= 30:
+        score -= 5
+        reasons.append(f"RSI={rsi}，动能偏弱")
+    elif rsi >= 20:
+        score += 12
+        reasons.append(f"RSI={rsi}，超卖区域，存在反弹机会")
+    else:
+        score += 18
+        reasons.append(f"RSI={rsi}，严重超卖，反弹概率较大")
+
+    # MACD 贡献 (±12)
+    if macd_hist > 0 and (prev_row and macd_hist > prev_row["macd_histogram"]):
+        score += 12
+        reasons.append("MACD柱线为正且放大，多头动能增强")
+    elif macd_hist > 0:
+        score += 6
+        reasons.append("MACD柱线为正，处于多头区间")
+    elif macd_hist < 0 and (prev_row and macd_hist < prev_row["macd_histogram"]):
+        score -= 12
+        reasons.append("MACD柱线为负且放大，空头动能增强")
+        risk_factors.append("MACD空头加速")
+    else:
+        score -= 6
+        reasons.append("MACD柱线为负，处于空头区间")
+
+    # MACD 金叉/死叉 (±5)
+    if macd_line > signal_line:
+        score += 5
+        reasons.append("MACD金叉，短期偏多")
+    else:
+        score -= 5
+        reasons.append("MACD死叉，短期偏空")
+
+    # 均线位置 (±8)
+    if above_ma and ma_diff_pct > 3:
+        score += 8
+        reasons.append(f"价格在20日均线上方{ma_diff_pct:.1f}%，趋势强势")
+    elif above_ma:
+        score += 4
+        reasons.append("价格在20日均线上方，趋势偏多")
+    elif ma_diff_pct < -3:
+        score -= 8
+        reasons.append(f"价格在20日均线下方{abs(ma_diff_pct):.1f}%，趋势弱势")
+        risk_factors.append("远离均线支撑")
+    else:
+        score -= 4
+        reasons.append("价格在20日均线下方，趋势偏空")
+
+    # 量能 (±5)
+    if vol_ratio > 2.0 and change > 0:
+        score += 5
+        reasons.append(f"放量上涨({vol_ratio:.1f}倍均量)，资金积极进场")
+    elif vol_ratio > 2.0 and change < 0:
+        score -= 5
+        reasons.append(f"放量下跌({vol_ratio:.1f}倍均量)，抛压沉重")
+        risk_factors.append("放量下跌")
+    elif vol_ratio < 0.5:
+        risk_factors.append(f"严重缩量({vol_ratio:.1f}倍均量)，流动性不足")
+
+    # 5日趋势 (±5)
+    if trend_5d > 5:
+        score += 5
+        reasons.append(f"近5日涨幅{trend_5d:.1f}%，短期强势")
+    elif trend_5d < -5:
+        score -= 5
+        reasons.append(f"近5日跌幅{trend_5d:.1f}%，短期弱势")
+        risk_factors.append("连续下跌趋势")
+
+    # 持仓盈亏影响 (±5)
+    if holding:
+        if pnl_pct > 10:
+            risk_factors.append(f"持仓浮盈{pnl_pct:.1f}%，注意保护利润")
+        elif pnl_pct < -5:
+            score -= 5
+            risk_factors.append(f"持仓浮亏{pnl_pct:.1f}%，关注止损")
+
+    # 钳制到 [0, 100]
+    score = max(0, min(100, score))
+
+    # 补充通用风险因子
+    if cash_pct < 0.2:
+        risk_factors.append("现金比例偏低，加仓空间有限")
+
+    if not risk_factors:
+        risk_factors.append("当前无显著风险信号")
+
+    # ---- 输出 ----
+    output_json = {
+        "score": score,
+        "reasons": reasons,
+        "risk_factors": risk_factors,
+    }
+
+    answer = (
+        f"```json\n{json.dumps(output_json, ensure_ascii=False, indent=2)}\n```\n\n"
+        f"**评分解读**：交易评分 {score}/100，"
+    )
+
+    if score >= 70:
+        answer += "多项指标共振偏多，买入信号较强。"
+    elif score >= 55:
+        answer += "偏多但信号不够强烈，可轻仓试探或持仓待涨。"
+    elif score >= 45:
+        answer += "多空均衡，建议观望等待方向明确。"
+    elif score >= 30:
+        answer += "偏空信号，建议减仓或观望。"
+    else:
+        answer += "强烈看空信号，建议卖出或空仓回避。"
+
+    if risk_factors and risk_factors[0] != "当前无显著风险信号":
+        answer += "\n\n**风险提示**：" + "；".join(risk_factors) + "。"
+
+    answer += "\n\n*评分仅基于技术指标，实际决策需结合基本面、市场环境和仓位管理。*"
+
+    return question, answer
+
+
+# ============================================================
 # 主流程
 # ============================================================
 
@@ -616,16 +830,22 @@ def process_market(market_key, config):
             ttype = None
             r = random.random()
 
+            # 各模板分配比例：技术分析 / 趋势 / 信号JSON / 评分0-100 / 品种专属
+            rows_ctx = rows[max(0, idx-5):idx+1]
+
             if market_key == "futures":
-                if r < 0.25:
+                if r < 0.20:
                     q, a = gen_technical_analysis(symbol, label, row, prev_row)
                     ttype = "technical"
-                elif r < 0.40:
+                elif r < 0.32:
                     q, a = gen_trend_analysis(symbol, label, rows[max(0, idx-4):idx+1])
                     ttype = "trend"
-                elif r < 0.55:
+                elif r < 0.42:
                     q, a = gen_trading_signal(symbol, label, row, prev_row)
                     ttype = "signal"
+                elif r < 0.55:
+                    q, a = gen_trading_score(symbol, label, row, rows_ctx, prev_row)
+                    ttype = "score"
                 elif r < 0.78:
                     q, a = gen_futures_basis_analysis(symbol, rows[max(0, idx-10):idx+1])
                     ttype = "futures_basis"
@@ -633,28 +853,34 @@ def process_market(market_key, config):
                     q, a = gen_futures_seasonality(symbol, rows[:idx+1])
                     ttype = "futures_season"
             elif market_key == "etf":
-                if r < 0.30:
-                    q, a = gen_technical_analysis(symbol, label, row, prev_row)
-                    ttype = "technical"
-                elif r < 0.45:
-                    q, a = gen_trend_analysis(symbol, label, rows[max(0, idx-4):idx+1])
-                    ttype = "trend"
-                elif r < 0.60:
-                    q, a = gen_trading_signal(symbol, label, row, prev_row)
-                    ttype = "signal"
-                else:
-                    q, a = gen_etf_tracking_analysis(symbol, rows[max(0, idx-19):idx+1])
-                    ttype = "etf_tracking"
-            elif market_key == "cbond":
-                if r < 0.20:
+                if r < 0.22:
                     q, a = gen_technical_analysis(symbol, label, row, prev_row)
                     ttype = "technical"
                 elif r < 0.35:
                     q, a = gen_trend_analysis(symbol, label, rows[max(0, idx-4):idx+1])
                     ttype = "trend"
-                elif r < 0.50:
+                elif r < 0.47:
                     q, a = gen_trading_signal(symbol, label, row, prev_row)
                     ttype = "signal"
+                elif r < 0.62:
+                    q, a = gen_trading_score(symbol, label, row, rows_ctx, prev_row)
+                    ttype = "score"
+                else:
+                    q, a = gen_etf_tracking_analysis(symbol, rows[max(0, idx-19):idx+1])
+                    ttype = "etf_tracking"
+            elif market_key == "cbond":
+                if r < 0.18:
+                    q, a = gen_technical_analysis(symbol, label, row, prev_row)
+                    ttype = "technical"
+                elif r < 0.30:
+                    q, a = gen_trend_analysis(symbol, label, rows[max(0, idx-4):idx+1])
+                    ttype = "trend"
+                elif r < 0.40:
+                    q, a = gen_trading_signal(symbol, label, row, prev_row)
+                    ttype = "signal"
+                elif r < 0.52:
+                    q, a = gen_trading_score(symbol, label, row, rows_ctx, prev_row)
+                    ttype = "score"
                 elif r < 0.78:
                     q, a = gen_cbond_analysis(symbol, rows[max(0, idx-9):idx+1])
                     ttype = "cbond_analysis"
@@ -662,15 +888,18 @@ def process_market(market_key, config):
                     q, a = gen_cbond_strategy(symbol, rows[max(0, idx-19):idx+1])
                     ttype = "cbond_strategy"
             else:  # ashare
-                if r < 0.30:
+                if r < 0.22:
                     q, a = gen_technical_analysis(symbol, label, row, prev_row)
                     ttype = "technical"
-                elif r < 0.50:
+                elif r < 0.38:
                     q, a = gen_trend_analysis(symbol, label, rows[max(0, idx-4):idx+1])
                     ttype = "trend"
-                else:
+                elif r < 0.55:
                     q, a = gen_trading_signal(symbol, label, row, prev_row)
                     ttype = "signal"
+                else:
+                    q, a = gen_trading_score(symbol, label, row, rows_ctx, prev_row)
+                    ttype = "score"
 
             if q and a:
                 record = {
