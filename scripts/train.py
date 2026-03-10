@@ -23,7 +23,7 @@ MODEL_NAME = "unsloth/Qwen2.5-14B-bnb-4bit"
 MAX_SEQ_LENGTH = 2048
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "output", "quant-qwen2.5-14b-lora")
-DATA_FILE = os.path.join(PROJECT_ROOT, "training-data", "merged_train.jsonl")
+DATA_FILE = os.path.join(PROJECT_ROOT, "training-data", "merged_train_v2.jsonl")
 
 # ============================================================
 # 1. 加载模型
@@ -42,13 +42,14 @@ model, tokenizer = FastLanguageModel.from_pretrained(
 print("2. 配置 LoRA 适配器...")
 model = FastLanguageModel.get_peft_model(
     model,
-    r=16,
+    r=32,
     target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
                      "gate_proj", "up_proj", "down_proj"],
-    lora_alpha=16,
+    lora_alpha=32,
     lora_dropout=0,
     bias="none",
     use_gradient_checkpointing="unsloth",  # 节省显存
+    use_rslora=True,  # Rank-Stabilized LoRA，高 rank 时更稳定
     random_state=42,
 )
 

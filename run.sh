@@ -7,9 +7,11 @@
 # 带参数：执行指定步骤
 #   crawl      — 仅数据采集（A股+多市场）
 #   convert    — 仅数据转换
+#   generate   — 数据增强（FinGPT+量化计算+推理链）
 #   merge      — 仅合并训练集
 #   train      — 仅训练
 #   export     — 导出 GGUF
+#   eval       — 模型评估
 #   all        — 全部流程
 # ============================================================
 
@@ -85,6 +87,30 @@ step_convert() {
 }
 
 # ============================================================
+# Step 2.5: 数据增强（FinGPT + 量化计算 + 推理链）
+# ============================================================
+step_generate() {
+    log "========== Step 2.5: 数据增强 =========="
+
+    # FinGPT（仅需网络）
+    log "[1/3] FinGPT A股预测数据..."
+    python3 "$SCRIPTS_DIR/fetch_fingpt_data.py" || warn "FinGPT 数据下载失败，跳过"
+
+    # 量化计算种子扩展（需 ollama）
+    if curl -s "$OLLAMA_URL/api/tags" >/dev/null 2>&1; then
+        log "[2/3] 量化计算种子扩展 (qwen3:14b)..."
+        python3 "$SCRIPTS_DIR/generate_quant_calculations.py" || warn "量化计算扩展失败，跳过"
+
+        log "[3/3] 推理链增强 (deepseek-r1:32b)..."
+        python3 "$SCRIPTS_DIR/add_reasoning_chains.py" || warn "推理链增强失败，跳过"
+    else
+        warn "ollama 不可用，跳过量化计算和推理链增强"
+    fi
+
+    log "数据增强完成"
+}
+
+# ============================================================
 # Step 3: 合并训练集
 # ============================================================
 step_merge() {
@@ -152,6 +178,25 @@ step_export() {
 }
 
 # ============================================================
+# Step 6: 模型评估
+# ============================================================
+step_eval() {
+    log "========== Step 6: 模型评估 =========="
+
+    if [ ! -d "$PROJECT_DIR/output/quant-qwen2.5-14b-lora" ]; then
+        err "模型目录不存在，请先训练"
+    fi
+
+    # 释放 ollama 显存
+    curl -s "$OLLAMA_URL/api/generate" -d '{"model":"qwen3:14b","keep_alive":0}' >/dev/null 2>&1 || true
+    curl -s "$OLLAMA_URL/api/generate" -d '{"model":"deepseek-r1:32b","keep_alive":0}' >/dev/null 2>&1 || true
+    sleep 3
+
+    python3 "$SCRIPTS_DIR/evaluate.py"
+    log "评估完成"
+}
+
+# ============================================================
 # 主流程
 # ============================================================
 
@@ -174,6 +219,9 @@ case "$STEP" in
     convert)
         step_convert
         ;;
+    generate)
+        step_generate
+        ;;
     merge)
         step_merge
         ;;
@@ -183,21 +231,27 @@ case "$STEP" in
     export)
         step_export
         ;;
+    eval)
+        step_eval
+        ;;
     all)
         step_crawl
         step_convert
+        step_generate
         step_merge
         step_train
         ;;
     *)
-        echo "用法: bash run.sh [crawl|convert|merge|train|export|all]"
+        echo "用法: bash run.sh [crawl|convert|generate|merge|train|export|eval|all]"
         echo ""
-        echo "  crawl    数据采集（A股+期货+ETF+可转债）"
-        echo "  convert  行情数据 → 训练问答对"
-        echo "  merge    合并所有数据源 → 最终训练集"
-        echo "  train    QLoRA 微调训练"
-        echo "  export   导出 GGUF 格式"
-        echo "  all      执行全部流程（默认）"
+        echo "  crawl      数据采集（A股+期货+ETF+可转债）"
+        echo "  convert    行情数据 → 训练问答对"
+        echo "  generate   数据增强（FinGPT+量化计算+推理链）"
+        echo "  merge      合并所有数据源 → 最终训练集"
+        echo "  train      QLoRA 微调训练"
+        echo "  export     导出 GGUF 格式"
+        echo "  eval       模型评估"
+        echo "  all        执行全部流程（默认）"
         exit 1
         ;;
 esac

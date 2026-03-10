@@ -13,9 +13,11 @@ bash /tmp/quant-llm/run.sh
 # 或分步执行
 bash /tmp/quant-llm/run.sh crawl     # 仅数据采集
 bash /tmp/quant-llm/run.sh convert   # 仅数据转换
+bash /tmp/quant-llm/run.sh generate  # 数据增强（FinGPT+量化计算+推理链）
 bash /tmp/quant-llm/run.sh merge     # 仅合并训练集
 bash /tmp/quant-llm/run.sh train     # 仅训练
 bash /tmp/quant-llm/run.sh export    # 导出 GGUF
+bash /tmp/quant-llm/run.sh eval      # 模型评估
 ```
 
 `run.sh` 会自动完成环境检查、依赖验证、GPU 显存释放、数据路径配置等工作，无需手动干预。
@@ -38,10 +40,11 @@ source /tmp/quant-llm/finetune-env/bin/activate
 pip install akshare pandas numpy unsloth trl transformers datasets torch
 ```
 
-如需使用 `generate_training_data.py`（从 GitHub 仓库生成问答对），还需本地运行 [ollama](https://ollama.com/) 并拉取模型：
+如需使用数据增强功能（`run.sh generate`），还需本地运行 [ollama](https://ollama.com/) 并拉取模型：
 
 ```bash
-ollama pull qwen3:14b
+ollama pull qwen3:14b        # 量化计算种子扩展
+ollama pull deepseek-r1:32b  # 推理链增强（可选，耗时较长）
 ```
 
 ## 项目结构
@@ -60,8 +63,12 @@ ollama pull qwen3:14b
 │   ├── convert_ashare_to_training.py  #   A股行情 → 技术分析训练对
 │   ├── convert_all_to_training.py     #   全市场行情 → 训练对（A股+期货+ETF+转债）
 │   ├── prepare_dataset.py            #   合并多源指令数据为统一ChatML JSONL
-│   ├── merge_and_retrain.py          #   合并指令数据+行情数据 → 最终训练集
+│   ├── fetch_fingpt_data.py          #   FinGPT A股预测数据 → ChatML
+│   ├── generate_quant_calculations.py #  量化计算种子扩展（60→500条）
+│   ├── add_reasoning_chains.py       #   推理链增强（deepseek-r1:32b）
+│   ├── merge_and_retrain.py          #   合并所有数据源 → 最终训练集
 │   ├── train.py                      #   QLoRA微调训练脚本（Unsloth）
+│   ├── evaluate.py                   #   模型评估（ROUGE-L+结构化指标）
 │   └── export_gguf.py                #   导出 GGUF 格式
 │
 ├── training-data/                     # 所有训练数据（.gitignore 忽略）
@@ -76,11 +83,15 @@ ollama pull qwen3:14b
 │   ├── merged_train.jsonl             #   v1 指令数据 (~30k条)
 │   ├── quant-github-generated.jsonl   #   GitHub策略问答 (~55条)
 │   ├── all_market_train.jsonl         #   全市场行情训练对 (~10k条)
-│   └── merged_train_v2.jsonl          #   v2 最终训练集 (~40k条)
+│   ├── fingpt_forecaster.jsonl        #   FinGPT A股预测（数百条）
+│   ├── quant_calculations.jsonl       #   量化计算问答（~500条）
+│   ├── reasoning_enhanced.jsonl       #   推理链增强（~2000条）
+│   └── merged_train_v2.jsonl          #   最终训练集 (~40k+条)
 │
 ├── output/                            # 模型输出
 │   ├── quant-qwen2.5-14b-lora/        #   LoRA适配器权重
-│   └── gguf/                          #   GGUF 导出文件
+│   ├── gguf/                          #   GGUF 导出文件
+│   └── eval_results.json              #   评估结果
 │
 ├── finetune-env/                      # Python 虚拟环境
 └── unsloth_compiled_cache/            # 编译缓存
@@ -116,6 +127,14 @@ ollama pull qwen3:14b
 | ETF基金 | 2000条 | 波动率评估、配置价值分析 |
 | 可转债 | 1500条 | 价格区间分析（折价/平价/偏股/高价）、双低策略 |
 
+### Step 2.5: 数据增强 (`run.sh generate`)
+
+| 数据源 | 条数 | 方法 |
+|--------|------|------|
+| FinGPT A股预测 | 数百条 | HuggingFace 下载 + Llama2→ChatML 转换 |
+| 量化计算种子扩展 | ~500条 | 60条手写种子 + qwen3:14b few-shot 扩展 |
+| 推理链增强 | ~2000条 | deepseek-r1:32b 为高质量记录添加 `<think>` 推理链 |
+
 ### Step 3: 合并训练集 (`run.sh merge`)
 
 | 数据源 | 条数 | 内容 |
@@ -127,7 +146,10 @@ ollama pull qwen3:14b
 | 可转债分析 | ≤1,500 | 双低策略、价格区间 |
 | 英文量化指令 | 386 | 策略代码和回测 |
 | GitHub策略问答 | 55 | 高质量代码解读 |
-| **合计** | **~40,000** | |
+| FinGPT A股预测 | ~数百 | 沪深50股票趋势预测 |
+| 量化计算 | ~500 | 风险指标/期权定价/组合优化 |
+| 推理链增强 | ~2000 | 带 `<think>` 推理过程的高质量对 |
+| **合计** | **~43,000+** | |
 
 ### Step 4: 模型训练 (`run.sh train`)
 
@@ -137,8 +159,9 @@ ollama pull qwen3:14b
 | 参数 | 值 |
 |------|-----|
 | 基座模型 | unsloth/Qwen2.5-14B-bnb-4bit |
-| LoRA rank | 16 |
-| LoRA alpha | 16 |
+| LoRA rank | 32 |
+| LoRA alpha | 32 |
+| RSLoRA | True（高rank时更稳定） |
 | 目标模块 | q/k/v/o/gate/up/down_proj |
 | 学习率 | 2e-4 |
 | Batch size | 1（梯度累积8步，等效 batch_size=8） |
@@ -153,6 +176,14 @@ ollama pull qwen3:14b
 ### Step 5: 导出 GGUF (`run.sh export`)
 
 `scripts/export_gguf.py` 将 LoRA checkpoint 合并到基座模型并导出 Q4_K_M 量化 GGUF 格式，可用 ollama 加载。
+
+### Step 6: 模型评估 (`run.sh eval`)
+
+`scripts/evaluate.py` 批量评估微调模型质量：
+- 50 条手写测试题（覆盖技术分析、策略代码、量化计算、风控、可转债/ETF/期货）
+- 从训练集随机抽 2% 作为 holdout 测试集
+- 评估指标：ROUGE-L、平均回复长度、结构化输出率
+- 支持 `--baseline` 参数与基座模型对比
 
 ### 验证
 
