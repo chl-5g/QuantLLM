@@ -51,7 +51,8 @@ else
             echo "  >>> 自动重启训练..."
             cd /tmp/quant-llm
             source /opt/quant-llm/finetune-env/bin/activate
-            nohup python /opt/quant-llm/scripts/train.py > /tmp/quant-llm/train.log 2>&1 &
+            export http_proxy=http://192.168.0.10:6152 https_proxy=http://192.168.0.10:6152 no_proxy=localhost,127.0.0.1,::1,10.0.0.0/8,192.168.0.0/16
+            nohup python /opt/quant-llm/scripts/train.py >> /tmp/quant-llm/train.log 2>&1 &
             echo "  >>> 已重启: PID $!, 日志: /tmp/quant-llm/train.log"
         else
             echo "  提示: 用 bash ~/watch_training.sh --guard 可自动重启"
