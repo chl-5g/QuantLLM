@@ -186,8 +186,68 @@ def compute_rouge_l(prediction, reference):
     return f1
 
 
-def evaluate_model(model, tokenizer, test_data, label="model"):
-    """评估模型"""
+def check_numerical_correctness(question, response):
+    """检查量化计算题的数值正确性（关键公式验证）"""
+    import re
+    checks = []
+
+    # 夏普比率: (20% - 3%) / 15% = 1.133
+    if "夏普比率" in question and "年化收益20%" in question:
+        if any(x in response for x in ["1.13", "1.1333", "17/15"]):
+            checks.append(("夏普比率计算", True))
+        elif "夏普" in response:
+            checks.append(("夏普比率计算", False))
+
+    # 索提诺比率: (20% - 3%) / 10% = 1.7
+    if "索提诺比率" in question and "下行波动率为10%" in question:
+        if any(x in response for x in ["1.7", "17/10"]):
+            checks.append(("索提诺比率计算", True))
+        elif "索提诺" in response:
+            checks.append(("索提诺比率计算", False))
+
+    # 组合波动率: sqrt(0.6^2*0.2^2 + 0.4^2*0.3^2 + 2*0.6*0.4*0.5*0.2*0.3) ≈ 19.7%
+    if "组合波动率" in question and "相关系数0.5" in question:
+        nums = re.findall(r'(\d{2}(?:\.\d+)?)\s*%', response)
+        for n in nums:
+            if 19 <= float(n) <= 20.5:
+                checks.append(("组合波动率计算", True))
+                break
+        else:
+            if "组合波动" in response or "portfolio" in response.lower():
+                checks.append(("组合波动率计算", False))
+
+    # 凯利公式: f = p/b_loss - q/b_win = 0.55/0.02 - 0.45/0.03 = 12.5
+    if "凯利" in question and "胜率55%" in question:
+        if any(x in response for x in ["12.5", "0.125"]):
+            checks.append(("凯利公式计算", True))
+        elif "凯利" in response:
+            checks.append(("凯利公式计算", False))
+
+    # 最大回撤: (180-120)/180 = 33.3%
+    if "最大回撤" in question and "180" in question and "120" in question:
+        if any(x in response for x in ["33.3", "33.33", "1/3"]):
+            checks.append(("最大回撤计算", True))
+        elif "回撤" in response:
+            checks.append(("最大回撤计算", False))
+
+    # VaR 95%: 0.08% - 1.645 * 1.5% ≈ -2.39%
+    if "VaR" in question and "95%" in question and "1.5%" in question:
+        nums = re.findall(r'-?\d+\.\d+', response)
+        for n in nums:
+            if 2.3 <= abs(float(n)) <= 2.5:
+                checks.append(("VaR计算", True))
+                break
+        else:
+            if "VaR" in response or "var" in response.lower():
+                checks.append(("VaR计算", False))
+
+    return checks
+
+
+def evaluate_model(model, tokenizer, test_data, label="model", consistency_rounds=0):
+    """评估模型
+    consistency_rounds: >0 时对手写题额外生成 N 轮，检测回复一致性
+    """
     results = []
 
     for i, item in enumerate(test_data):
@@ -224,6 +284,25 @@ def evaluate_model(model, tokenizer, test_data, label="model"):
         # 结构化检查
         structured_markers = ["**", "##", "1.", "- ", "```", "指标", "策略", "风险"]
         result["structured_count"] = sum(1 for m in structured_markers if m in response)
+
+        # 量化计算数值正确性（仅量化计算类）
+        if category == "量化计算":
+            num_checks = check_numerical_correctness(question, response)
+            result["numerical_checks"] = num_checks
+
+        # 回复一致性检测（仅手写题，需 consistency_rounds > 0）
+        if consistency_rounds > 0 and "q" in item:
+            extra_responses = []
+            for _ in range(consistency_rounds):
+                extra = generate_response(model, tokenizer, question)
+                extra_responses.append(extra[:500])
+            # 计算各轮回复之间的 ROUGE-L 平均值作为一致性分数
+            all_texts = [response[:500]] + extra_responses
+            pair_scores = []
+            for a_idx in range(len(all_texts)):
+                for b_idx in range(a_idx + 1, len(all_texts)):
+                    pair_scores.append(compute_rouge_l(all_texts[a_idx], all_texts[b_idx]))
+            result["consistency_score"] = sum(pair_scores) / len(pair_scores) if pair_scores else 1.0
 
         results.append(result)
 
@@ -267,6 +346,27 @@ def print_summary(results, label="Model"):
         rouge_str = f", ROUGE-L={sum(rouge)/len(rouge):.4f}" if rouge else ""
         print(f"    {cat}: {len(items)}条, 平均长度={avg_len:.0f}{rouge_str}")
 
+    # 量化计算数值正确性
+    quant_results = [r for r in results if r.get("numerical_checks")]
+    if quant_results:
+        all_checks = []
+        for r in quant_results:
+            all_checks.extend(r["numerical_checks"])
+        if all_checks:
+            correct = sum(1 for _, ok in all_checks if ok)
+            print(f"\n  量化计算数值正确性: {correct}/{len(all_checks)} ({correct/len(all_checks)*100:.0f}%)")
+            for name, ok in all_checks:
+                print(f"    {'✓' if ok else '✗'} {name}")
+
+    # 回复一致性
+    consistency = [r["consistency_score"] for r in results if "consistency_score" in r]
+    if consistency:
+        avg_c = sum(consistency) / len(consistency)
+        low_c = sum(1 for c in consistency if c < 0.3)
+        print(f"\n  回复一致性 (ROUGE-L between rounds):")
+        print(f"    平均一致性: {avg_c:.4f}")
+        print(f"    低一致性题目 (<0.3): {low_c}/{len(consistency)}")
+
     # 对抗性测试子类统计
     adversarial = [r for r in results if r["category"] == "对抗性" and r.get("subcat")]
     if adversarial:
@@ -302,6 +402,7 @@ def main():
     parser.add_argument("--manual-only", action="store_true", help="仅评估手写测试题")
     parser.add_argument("--holdout-only", action="store_true", help="仅评估 holdout 数据")
     parser.add_argument("--max-holdout", type=int, default=100, help="最多评估的 holdout 条数")
+    parser.add_argument("--consistency", type=int, default=0, help="一致性检测轮数（0=关闭，2=推荐）")
     args = parser.parse_args()
 
     print("=" * 60)
@@ -336,8 +437,11 @@ def main():
     FastLanguageModel.for_inference(model)
 
     # 评估微调模型
+    if args.consistency:
+        print(f"一致性检测: 每题额外生成 {args.consistency} 轮")
     print("\n评估微调模型...")
-    finetuned_results = evaluate_model(model, tokenizer, test_data, label="finetuned")
+    finetuned_results = evaluate_model(model, tokenizer, test_data, label="finetuned",
+                                       consistency_rounds=args.consistency)
     print_summary(finetuned_results, label="微调模型")
 
     all_results = {"finetuned": finetuned_results}
@@ -358,7 +462,8 @@ def main():
         FastLanguageModel.for_inference(base_model)
 
         print("\n评估基座模型...")
-        baseline_results = evaluate_model(base_model, base_tokenizer, test_data, label="baseline")
+        baseline_results = evaluate_model(base_model, base_tokenizer, test_data, label="baseline",
+                                          consistency_rounds=args.consistency)
         print_summary(baseline_results, label="基座模型")
         all_results["baseline"] = baseline_results
 

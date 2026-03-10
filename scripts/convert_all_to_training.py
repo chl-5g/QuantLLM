@@ -477,6 +477,100 @@ def gen_cbond_strategy(symbol, rows):
     return question, answer
 
 # ============================================================
+# 结构化交易信号模板（JSON 输出格式）
+# ============================================================
+
+def gen_trading_signal(symbol, market_label, row, prev_row=None):
+    """生成结构化交易信号（教模型输出 JSON 格式决策）"""
+    rsi = row["rsi_14"]
+    macd_hist = row["macd_histogram"]
+    above_ma = row["close"] > row["close_ma_20"]
+    change = calc_change_pct(row["close"], row["open"])
+    vol_ratio = row["volume"] / row["volume_ma_5"] if row["volume_ma_5"] > 0 else 1.0
+
+    question = (
+        f"【{market_label}】请根据以下行情数据，给出 {symbol} 在 {row['date']} 的交易信号。"
+        f"要求以 JSON 格式输出，包含 action、reasons、confidence 字段。\n"
+        f"- 收盘价: {row['close']}，涨跌: {change:+.2f}%\n"
+        f"- RSI(14) = {rsi}\n"
+        f"- MACD柱线 = {macd_hist}\n"
+        f"- 20日均线 = {row['close_ma_20']}\n"
+        f"- 成交量/5日均量 = {vol_ratio:.2f}\n"
+    )
+
+    # 决策逻辑
+    reasons = []
+    bullish_count = 0
+    bearish_count = 0
+
+    if rsi >= 70:
+        reasons.append(f"RSI={rsi}，处于超买区域，有回调风险")
+        bearish_count += 1
+    elif rsi <= 30:
+        reasons.append(f"RSI={rsi}，处于超卖区域，存在反弹机会")
+        bullish_count += 1
+    elif rsi >= 50:
+        reasons.append(f"RSI={rsi}，动能偏强")
+        bullish_count += 0.5
+    else:
+        reasons.append(f"RSI={rsi}，动能偏弱")
+        bearish_count += 0.5
+
+    if macd_hist > 0:
+        reasons.append("MACD柱线为正，多头区间")
+        bullish_count += 1
+    else:
+        reasons.append("MACD柱线为负，空头区间")
+        bearish_count += 1
+
+    if above_ma:
+        reasons.append("价格在20日均线上方，趋势偏多")
+        bullish_count += 1
+    else:
+        reasons.append("价格在20日均线下方，趋势偏空")
+        bearish_count += 1
+
+    if vol_ratio > 1.5:
+        reasons.append(f"成交量放大({vol_ratio:.1f}倍均量)，市场活跃")
+    elif vol_ratio < 0.6:
+        reasons.append(f"成交量萎缩({vol_ratio:.1f}倍均量)，观望情绪浓")
+
+    # 综合判断
+    if bullish_count >= 2.5 and rsi < 75:
+        action = "buy"
+        confidence = min(0.85, 0.5 + bullish_count * 0.1)
+        reasons.append("多项指标共振偏多，建议买入")
+    elif bearish_count >= 2.5 and rsi > 25:
+        action = "sell"
+        confidence = min(0.85, 0.5 + bearish_count * 0.1)
+        reasons.append("多项指标共振偏空，建议卖出")
+    else:
+        action = "hold"
+        confidence = 0.5
+        reasons.append("多空信号不一致，建议持仓观望")
+
+    signal = {
+        "action": action,
+        "symbol": symbol,
+        "date": row["date"],
+        "reasons": reasons,
+        "confidence": round(confidence, 2),
+        "risk_note": "以上信号仅基于技术指标，需结合基本面和仓位管理综合决策"
+    }
+
+    answer = (
+        f"根据{symbol}在{row['date']}的技术指标综合分析，交易信号如下：\n\n"
+        f"```json\n{json.dumps(signal, ensure_ascii=False, indent=2)}\n```\n\n"
+        f"**信号解读**：\n"
+    )
+    for r in reasons:
+        answer += f"- {r}\n"
+    answer += f"\n*置信度 {confidence:.0%}，{'信号较强' if confidence >= 0.7 else '信号一般，建议结合其他因素确认'}。*"
+
+    return question, answer
+
+
+# ============================================================
 # 主流程
 # ============================================================
 
@@ -523,53 +617,60 @@ def process_market(market_key, config):
             r = random.random()
 
             if market_key == "futures":
-                if r < 0.30:
+                if r < 0.25:
                     q, a = gen_technical_analysis(symbol, label, row, prev_row)
                     ttype = "technical"
-                elif r < 0.50:
+                elif r < 0.40:
                     q, a = gen_trend_analysis(symbol, label, rows[max(0, idx-4):idx+1])
                     ttype = "trend"
-                elif r < 0.75:
+                elif r < 0.55:
+                    q, a = gen_trading_signal(symbol, label, row, prev_row)
+                    ttype = "signal"
+                elif r < 0.78:
                     q, a = gen_futures_basis_analysis(symbol, rows[max(0, idx-10):idx+1])
                     ttype = "futures_basis"
                 else:
                     q, a = gen_futures_seasonality(symbol, rows[:idx+1])
                     ttype = "futures_season"
             elif market_key == "etf":
-                if r < 0.35:
-                    q, a = gen_technical_analysis(symbol, label, row, prev_row)
-                    ttype = "technical"
-                elif r < 0.55:
-                    q, a = gen_trend_analysis(symbol, label, rows[max(0, idx-4):idx+1])
-                    ttype = "trend"
-                else:
-                    q, a = gen_etf_tracking_analysis(symbol, rows[max(0, idx-19):idx+1])
-                    ttype = "etf_tracking"
-            elif market_key == "cbond":
-                if r < 0.25:
+                if r < 0.30:
                     q, a = gen_technical_analysis(symbol, label, row, prev_row)
                     ttype = "technical"
                 elif r < 0.45:
                     q, a = gen_trend_analysis(symbol, label, rows[max(0, idx-4):idx+1])
                     ttype = "trend"
-                elif r < 0.75:
+                elif r < 0.60:
+                    q, a = gen_trading_signal(symbol, label, row, prev_row)
+                    ttype = "signal"
+                else:
+                    q, a = gen_etf_tracking_analysis(symbol, rows[max(0, idx-19):idx+1])
+                    ttype = "etf_tracking"
+            elif market_key == "cbond":
+                if r < 0.20:
+                    q, a = gen_technical_analysis(symbol, label, row, prev_row)
+                    ttype = "technical"
+                elif r < 0.35:
+                    q, a = gen_trend_analysis(symbol, label, rows[max(0, idx-4):idx+1])
+                    ttype = "trend"
+                elif r < 0.50:
+                    q, a = gen_trading_signal(symbol, label, row, prev_row)
+                    ttype = "signal"
+                elif r < 0.78:
                     q, a = gen_cbond_analysis(symbol, rows[max(0, idx-9):idx+1])
                     ttype = "cbond_analysis"
                 else:
                     q, a = gen_cbond_strategy(symbol, rows[max(0, idx-19):idx+1])
                     ttype = "cbond_strategy"
             else:  # ashare
-                if r < 0.40:
+                if r < 0.30:
                     q, a = gen_technical_analysis(symbol, label, row, prev_row)
                     ttype = "technical"
-                elif r < 0.60:
+                elif r < 0.50:
                     q, a = gen_trend_analysis(symbol, label, rows[max(0, idx-4):idx+1])
                     ttype = "trend"
                 else:
-                    # 复用 convert_ashare_to_training.py 的信号/风险模板太多重复
-                    # 这里用通用技术分析即可
-                    q, a = gen_technical_analysis(symbol, label, row, prev_row)
-                    ttype = "technical"
+                    q, a = gen_trading_signal(symbol, label, row, prev_row)
+                    ttype = "signal"
 
             if q and a:
                 record = {

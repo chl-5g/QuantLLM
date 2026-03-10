@@ -31,6 +31,24 @@ QUANT_KEYWORDS = [
     "VaR", "最大回撤", "信息比率", "IC", "协整", "GARCH",
 ]
 
+# 交易决策类关键词 — 包含这些的记录跳过推理链增强
+# 依据 StockBench 发现：推理微调不优于指令微调（在交易决策场景）
+DECISION_SKIP_KEYWORDS = [
+    "买入", "卖出", "做多", "做空", "建仓", "加仓", "减仓", "清仓",
+    "操作建议", "交易信号", "追高", "抄底", "逢低", "止盈止损",
+    "应该买", "应该卖", "是否买入", "是否卖出",
+    "综合判断", "短期趋势", "涨停", "跌停",
+    "action", "buy", "sell", "hold",
+]
+
+# 适合推理链的知识解释类关键词
+REASONING_PREFER_KEYWORDS = [
+    "计算", "公式", "推导", "原理", "解释", "为什么", "如何理解",
+    "区别", "比较", "VaR", "夏普", "久期", "凸性", "Black-Scholes",
+    "凯利", "IC", "ICIR", "协整", "Hurst", "GARCH", "波动率建模",
+    "风险度量", "组合优化", "因子分析", "统计检验",
+]
+
 MAX_RECORDS = 2000
 
 
@@ -85,8 +103,9 @@ def record_hash(record):
 
 
 def select_records(input_file, max_count):
-    """筛选高质量记录"""
+    """筛选高质量记录（仅知识解释/量化计算类，跳过交易决策类）"""
     candidates = []
+    skipped_decision = 0
     with open(input_file, "r", encoding="utf-8") as f:
         for line in f:
             record = json.loads(line)
@@ -108,18 +127,29 @@ def select_records(input_file, max_count):
             if len(assistant_msg) < 200:
                 continue
 
-            # 包含量化关键词
             combined = user_msg + assistant_msg
+
+            # 跳过交易决策类（StockBench 发现：推理微调不优于指令微调）
+            decision_hits = sum(1 for kw in DECISION_SKIP_KEYWORDS if kw in combined)
+            if decision_hits >= 2:
+                skipped_decision += 1
+                continue
+
+            # 包含量化关键词
             keyword_count = sum(1 for kw in QUANT_KEYWORDS if kw in combined)
             if keyword_count < 2:
                 continue
 
-            candidates.append((keyword_count, record))
+            # 优先推理链适合的主题（加权）
+            reasoning_bonus = sum(1 for kw in REASONING_PREFER_KEYWORDS if kw in combined)
+            score = keyword_count + reasoning_bonus * 2
 
-    # 按关键词数量排序，取前 max_count 条
+            candidates.append((score, record))
+
+    # 按分数排序，取前 max_count 条
     candidates.sort(key=lambda x: x[0], reverse=True)
     selected = [r for _, r in candidates[:max_count]]
-    print(f"  候选记录: {len(candidates)}, 选中: {len(selected)}")
+    print(f"  候选记录: {len(candidates)}, 跳过交易决策类: {skipped_decision}, 选中: {len(selected)}")
     return selected
 
 
