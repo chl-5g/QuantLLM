@@ -23,6 +23,7 @@ model:
   base_model: unsloth/Qwen2.5-14B-bnb-4bit
   max_seq_length: 2048
   output_dir: output/quant-qwen2.5-14b-lora
+  version: v1                               # 手动指定，评估时写入元信息
 
 # ----------------------------------------------------------
 # LoRA 配置

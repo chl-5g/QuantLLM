@@ -28,6 +28,7 @@ def extract_metrics(data):
 
     metrics = {
         "version": meta.get("version", "?"),
+        "model_version": meta.get("model_version", "?"),
         "date": meta.get("date", "?"),
         "model_dir": os.path.basename(meta.get("model_dir", "?")),
         "test_count": len(results),
@@ -71,7 +72,7 @@ def extract_metrics(data):
     # 数值正确性
     num_checks = []
     for r in results:
-        num_checks.extend(r.get("numerical_checks", []))
+        num_checks.extend(r.get("numeric_accuracy", []))
     if num_checks:
         correct = sum(1 for _, ok in num_checks if ok)
         metrics["numerical_acc"] = f"{correct}/{len(num_checks)} ({correct/len(num_checks)*100:.0f}%)"
@@ -97,6 +98,7 @@ def print_comparison(all_metrics):
     # 表头
     cols = [
         ("版本", "version"),
+        ("模型", "model_version"),
         ("日期", "date"),
         ("样本数", "test_count"),
         ("ROUGE-L", "rouge_l"),

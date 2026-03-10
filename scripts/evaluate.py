@@ -288,7 +288,7 @@ def evaluate_model(model, tokenizer, test_data, label="model", consistency_round
         # 量化计算数值正确性（仅量化计算类）
         if category == "量化计算":
             num_checks = check_numerical_correctness(question, response)
-            result["numerical_checks"] = num_checks
+            result["numeric_accuracy"] = num_checks
 
         # 回复一致性检测（仅手写题，需 consistency_rounds > 0）
         if consistency_rounds > 0 and "q" in item:
@@ -347,11 +347,11 @@ def print_summary(results, label="Model"):
         print(f"    {cat}: {len(items)}条, 平均长度={avg_len:.0f}{rouge_str}")
 
     # 量化计算数值正确性
-    quant_results = [r for r in results if r.get("numerical_checks")]
+    quant_results = [r for r in results if r.get("numeric_accuracy")]
     if quant_results:
         all_checks = []
         for r in quant_results:
-            all_checks.extend(r["numerical_checks"])
+            all_checks.extend(r["numeric_accuracy"])
         if all_checks:
             correct = sum(1 for _, ok in all_checks if ok)
             print(f"\n  量化计算数值正确性: {correct}/{len(all_checks)} ({correct/len(all_checks)*100:.0f}%)")
@@ -476,9 +476,20 @@ def main():
     version = len(existing) + 1
     versioned_file = os.path.join(OUTPUT_DIR, f"eval_results_v{version}.json")
 
-    # 附加元信息
+    # 附加元信息（从 config.yaml 读取模型版本）
+    model_version = "unknown"
+    try:
+        import yaml
+        cfg_path = os.path.join(PROJECT_ROOT, "config.yaml")
+        with open(cfg_path, "r", encoding="utf-8") as cf:
+            _cfg = yaml.safe_load(cf)
+        model_version = _cfg.get("model", {}).get("version", "unknown")
+    except Exception:
+        pass
+
     meta = {
         "version": version,
+        "model_version": model_version,
         "date": __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M"),
         "model_dir": MODEL_DIR,
         "base_model": BASE_MODEL,

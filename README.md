@@ -203,7 +203,10 @@ from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, DATA_DIR, OUTPUT_DIR
 - 从训练集随机抽 2% 作为 holdout 测试集
 - 评估指标：ROUGE-L、平均回复长度、结构化输出率、量化计算数值正确性、回复一致性
 - 支持 `--baseline` 参数与基座模型对比、`--consistency 2` 开启一致性检测
-- 结果自动版本化保存（`eval_results_v{N}.json`），可用 `compare_evals.py` 生成对比表
+- 结果自动版本化保存（`eval_results_v{N}.json`），可用对比脚本查看历史趋势：
+```bash
+python3 scripts/compare_evals.py    # 生成 Markdown 对比表 → output/eval_comparison.md
+```
 
 ### 验证
 
