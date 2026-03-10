@@ -858,18 +858,44 @@ def gen_trading_signal(symbol, market_label, row, prev_row=None):
 
 def _detect_regime(all_rows, current_idx):
     """
-    从个股历史数据推导牛/熊/震荡环境。
-    用 close vs 120日均线 + 均线方向 近似判断。
-    返回: ("牛市"|"熊市"|"震荡", ma120, ma120_slope_pct)
+    多指标融合判定牛/熊/震荡环境。
+
+    5 个维度各 ±1 分，总分 [-5, +5]：
+      1. MA120 位置：close vs MA120
+      2. MA120 斜率：20日变化率
+      3. 量能趋势：近20日成交量均值 vs 前60日
+      4. 波动率状态：近20日波动率 vs 长期均值
+      5. 价格动量：近60日收益率
+
+    返回: (regime_str, detail_dict)
+      regime_str: "牛市"|"熊市"|"震荡"
+      detail_dict: {ma120, ma120_slope, vol_trend, volatility_ratio, momentum_60d, regime_score}
     """
     ma_window = 120
     if current_idx < ma_window:
         return "震荡", None, 0
 
+    regime_score = 0
+    detail = {}
+
+    # ---- 1. MA120 位置 ----
     closes_120 = [all_rows[i]["close"] for i in range(current_idx - ma_window + 1, current_idx + 1)]
     ma120 = sum(closes_120) / len(closes_120)
+    current_close = all_rows[current_idx]["close"]
+    ma120_pct = (current_close - ma120) / ma120 * 100
 
-    # 均线方向：用 20 日前的 MA120 对比
+    if ma120_pct > 5:
+        regime_score += 1
+    elif ma120_pct > 0:
+        regime_score += 0.5
+    elif ma120_pct < -5:
+        regime_score -= 1
+    elif ma120_pct < 0:
+        regime_score -= 0.5
+
+    detail["ma120"] = round(ma120, 2)
+
+    # ---- 2. MA120 斜率 ----
     if current_idx >= ma_window + 20:
         closes_120_prev = [all_rows[i]["close"] for i in range(current_idx - ma_window - 19, current_idx - 19)]
         ma120_prev = sum(closes_120_prev) / len(closes_120_prev)
@@ -877,14 +903,95 @@ def _detect_regime(all_rows, current_idx):
     else:
         ma120_slope = 0
 
-    current_close = all_rows[current_idx]["close"]
+    if ma120_slope > 1.0:
+        regime_score += 1
+    elif ma120_slope > 0.3:
+        regime_score += 0.5
+    elif ma120_slope < -1.0:
+        regime_score -= 1
+    elif ma120_slope < -0.3:
+        regime_score -= 0.5
 
-    if current_close > ma120 and ma120_slope > 0.5:
-        return "牛市", round(ma120, 2), round(ma120_slope, 2)
-    elif current_close < ma120 and ma120_slope < -0.5:
-        return "熊市", round(ma120, 2), round(ma120_slope, 2)
+    detail["ma120_slope"] = round(ma120_slope, 2)
+
+    # ---- 3. 量能趋势（近20日均量 vs 前60日均量） ----
+    if current_idx >= 80:
+        vol_recent = np.mean([all_rows[i]["volume"] for i in range(current_idx - 19, current_idx + 1)])
+        vol_long = np.mean([all_rows[i]["volume"] for i in range(current_idx - 79, current_idx - 19)])
+        vol_ratio = vol_recent / vol_long if vol_long > 0 else 1.0
+
+        if vol_ratio > 1.3:
+            regime_score += 1  # 放量 → 趋势确认
+        elif vol_ratio > 1.1:
+            regime_score += 0.5
+        elif vol_ratio < 0.7:
+            regime_score -= 0.5  # 缩量 → 趋势减弱（但不一定看空）
+        detail["vol_trend"] = round(vol_ratio, 2)
     else:
-        return "震荡", round(ma120, 2), round(ma120_slope, 2)
+        detail["vol_trend"] = None
+
+    # ---- 4. 波动率状态（近20日 vs 长期） ----
+    if current_idx >= 80:
+        returns_recent = []
+        for i in range(current_idx - 19, current_idx + 1):
+            if i > 0 and all_rows[i-1]["close"] > 0:
+                returns_recent.append(
+                    (all_rows[i]["close"] - all_rows[i-1]["close"]) / all_rows[i-1]["close"]
+                )
+        returns_long = []
+        for i in range(current_idx - 79, current_idx - 19):
+            if i > 0 and all_rows[i-1]["close"] > 0:
+                returns_long.append(
+                    (all_rows[i]["close"] - all_rows[i-1]["close"]) / all_rows[i-1]["close"]
+                )
+        if returns_recent and returns_long:
+            vol_recent_std = np.std(returns_recent)
+            vol_long_std = np.std(returns_long)
+            vol_ratio_std = vol_recent_std / vol_long_std if vol_long_std > 0 else 1.0
+
+            # 低波动偏牛（稳定上涨），高波动偏熊（恐慌抛售）
+            if vol_ratio_std > 1.8:
+                regime_score -= 1
+            elif vol_ratio_std > 1.3:
+                regime_score -= 0.5
+            elif vol_ratio_std < 0.7:
+                regime_score += 0.5
+            detail["volatility_ratio"] = round(vol_ratio_std, 2)
+        else:
+            detail["volatility_ratio"] = None
+    else:
+        detail["volatility_ratio"] = None
+
+    # ---- 5. 60日价格动量 ----
+    if current_idx >= 60:
+        close_60ago = all_rows[current_idx - 60]["close"]
+        momentum_60d = (current_close - close_60ago) / close_60ago * 100 if close_60ago > 0 else 0
+
+        if momentum_60d > 15:
+            regime_score += 1
+        elif momentum_60d > 5:
+            regime_score += 0.5
+        elif momentum_60d < -15:
+            regime_score -= 1
+        elif momentum_60d < -5:
+            regime_score -= 0.5
+
+        detail["momentum_60d"] = round(momentum_60d, 2)
+    else:
+        detail["momentum_60d"] = None
+
+    # ---- 综合判定 ----
+    detail["regime_score"] = round(regime_score, 1)
+
+    if regime_score >= 2.0:
+        regime = "牛市"
+    elif regime_score <= -2.0:
+        regime = "熊市"
+    else:
+        regime = "震荡"
+
+    # 保持向后兼容：返回 (regime, ma120, ma120_slope) 三元组
+    return regime, round(ma120, 2), round(ma120_slope, 2), detail
 
 
 def gen_trading_score(symbol, market_label, row, rows_context, prev_row=None,
@@ -904,15 +1011,24 @@ def gen_trading_score(symbol, market_label, row, rows_context, prev_row=None,
     vol_ratio = row["volume"] / row["volume_ma_5"] if row["volume_ma_5"] > 0 else 1.0
     ma_diff_pct = (row["close"] - row["close_ma_20"]) / row["close_ma_20"] * 100 if row["close_ma_20"] != 0 else 0
 
-    # ---- 市场环境判断 ----
+    # ---- 市场环境判断（多指标融合） ----
     if all_rows is not None and current_idx is not None:
-        regime, ma120, ma120_slope = _detect_regime(all_rows, current_idx)
+        regime, ma120, ma120_slope, regime_detail = _detect_regime(all_rows, current_idx)
     else:
         regime, ma120, ma120_slope = "震荡", None, 0
+        regime_detail = {}
 
     regime_block = f"[MARKET_REGIME]\nregime: {regime}\n"
     if ma120 is not None:
         regime_block += f"ma120: {ma120}\nma120_slope: {ma120_slope:+.2f}%\n"
+    if regime_detail.get("vol_trend") is not None:
+        regime_block += f"vol_trend: {regime_detail['vol_trend']:.2f}\n"
+    if regime_detail.get("volatility_ratio") is not None:
+        regime_block += f"volatility_ratio: {regime_detail['volatility_ratio']:.2f}\n"
+    if regime_detail.get("momentum_60d") is not None:
+        regime_block += f"momentum_60d: {regime_detail['momentum_60d']:+.2f}%\n"
+    if regime_detail.get("regime_score") is not None:
+        regime_block += f"regime_score: {regime_detail['regime_score']}\n"
 
     # 模拟持仓状态（随机生成，让模型学会处理有/无持仓的场景）
     import hashlib
@@ -1069,19 +1185,37 @@ def gen_trading_score(symbol, market_label, row, rows_context, prev_row=None,
             score -= 5
             risk_factors.append(f"持仓浮亏{pnl_pct:.1f}%，关注止损")
 
-    # ---- 牛熊环境调整 ----
-    # 牛市：激进买入（整体加分），熊市：保守买入（整体减分）
+    # ---- 牛熊环境调整（多指标融合） ----
+    # regime_score 范围 [-5, +5]，|score| >= 2 判定为牛/熊
+    rs = regime_detail.get("regime_score", 0)
     if regime == "牛市":
-        regime_adj = 8
+        # 强牛(>=3.5)加10分，普通牛(>=2)加6分
+        regime_adj = 10 if rs >= 3.5 else 6
         score += regime_adj
-        reasons.append(f"当前处于牛市环境（MA120向上{ma120_slope:+.1f}%），策略偏激进")
+        factors = []
+        if ma120_slope > 0.5:
+            factors.append(f"MA120向上{ma120_slope:+.1f}%")
+        if regime_detail.get("momentum_60d") and regime_detail["momentum_60d"] > 5:
+            factors.append(f"60日动量{regime_detail['momentum_60d']:+.1f}%")
+        if regime_detail.get("vol_trend") and regime_detail["vol_trend"] > 1.1:
+            factors.append(f"量能放大{regime_detail['vol_trend']:.1f}倍")
+        desc = "、".join(factors) if factors else f"综合得分{rs}"
+        reasons.append(f"{'强' if rs >= 3.5 else ''}牛市环境（{desc}），策略偏激进")
     elif regime == "熊市":
-        regime_adj = -8
+        regime_adj = -10 if rs <= -3.5 else -6
         score += regime_adj
-        reasons.append(f"当前处于熊市环境（MA120向下{ma120_slope:+.1f}%），策略偏保守")
+        factors = []
+        if ma120_slope < -0.5:
+            factors.append(f"MA120向下{ma120_slope:+.1f}%")
+        if regime_detail.get("momentum_60d") and regime_detail["momentum_60d"] < -5:
+            factors.append(f"60日跌幅{regime_detail['momentum_60d']:+.1f}%")
+        if regime_detail.get("volatility_ratio") and regime_detail["volatility_ratio"] > 1.3:
+            factors.append(f"波动率放大{regime_detail['volatility_ratio']:.1f}倍")
+        desc = "、".join(factors) if factors else f"综合得分{rs}"
+        reasons.append(f"{'强' if rs <= -3.5 else ''}熊市环境（{desc}），策略偏保守")
         risk_factors.append("熊市环境下需严格止损，控制仓位")
     else:
-        reasons.append("当前处于震荡市，策略中性")
+        reasons.append(f"当前处于震荡市（综合得分{rs}），策略中性")
 
     # 钳制到 [0, 100]
     score = max(0, min(100, score))
