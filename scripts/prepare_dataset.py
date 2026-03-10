@@ -8,14 +8,14 @@ import re
 from datasets import load_from_disk
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OUTPUT = os.path.join(PROJECT_ROOT, "data", "merged_train.jsonl")
+OUTPUT = os.path.join(PROJECT_ROOT, "training-data", "merged_train.jsonl")
 SYSTEM_PROMPT = "你是一个专业的量化交易专家，擅长策略开发、因子分析、回测评估和风险管理。"
 
 records = []
 
 # === 1. GitHub 加工数据 (55条，高质量中文) ===
 print("加载 GitHub 加工数据...")
-with open(os.path.join(PROJECT_ROOT, "data", "quant-github-generated.jsonl"), "r") as f:
+with open(os.path.join(PROJECT_ROOT, "training-data", "quant-github-generated.jsonl"), "r") as f:
     for line in f:
         r = json.loads(line)
         records.append(r["messages"])
@@ -23,7 +23,7 @@ print(f"  {len(records)} 条")
 
 # === 2. BAAI 中文金融数据 (筛选中文 + 量化相关) ===
 print("加载 BAAI 中文金融数据...")
-ds = load_from_disk(os.path.join(PROJECT_ROOT, "BAAI_IndustryInstruction_Finance-Economics"))
+ds = load_from_disk(os.path.join(PROJECT_ROOT, "training-data", "BAAI_IndustryInstruction_Finance-Economics"))
 baai_count = 0
 
 # 量化/金融关键词
@@ -67,7 +67,7 @@ print(f"  筛选出 {baai_count} 条中文金融数据")
 
 # === 3. Quant-Trading-Instruct (386条，英文代码) ===
 print("加载 Quant-Trading-Instruct...")
-ds2 = load_from_disk(os.path.join(PROJECT_ROOT, "data", "quant-trading-instruct"))
+ds2 = load_from_disk(os.path.join(PROJECT_ROOT, "training-data", "quant-trading-instruct"))
 qt_count = 0
 for i in range(len(ds2)):
     r = ds2[i]

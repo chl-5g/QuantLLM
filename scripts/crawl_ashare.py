@@ -26,7 +26,7 @@ from datetime import datetime, timedelta
 # 配置
 # ============================================================
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OUTPUT_BASE = os.path.join(PROJECT_ROOT, "ashare")
+OUTPUT_BASE = os.path.join(PROJECT_ROOT, "training-data", "ashare")
 BASIC_DIR = os.path.join(OUTPUT_BASE, "basic")
 ADVANCED_DIR = os.path.join(OUTPUT_BASE, "advanced")
 PROGRESS_FILE = os.path.join(OUTPUT_BASE, "progress.json")

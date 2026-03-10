@@ -23,7 +23,7 @@ MODEL_NAME = "unsloth/Qwen2.5-14B-bnb-4bit"
 MAX_SEQ_LENGTH = 2048
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "output", "quant-qwen2.5-14b-lora")
-DATA_FILE = os.path.join(PROJECT_ROOT, "data", "merged_train.jsonl")
+DATA_FILE = os.path.join(PROJECT_ROOT, "training-data", "merged_train.jsonl")
 
 # ============================================================
 # 1. 加载模型
@@ -116,7 +116,13 @@ trainer = SFTTrainer(
 import torch
 print(f"训练前 GPU 显存: {torch.cuda.memory_allocated()/1e9:.1f}GB / {torch.cuda.get_device_properties(0).total_memory/1e9:.1f}GB")
 
-trainer_stats = trainer.train()
+# 自动从最新 checkpoint 恢复
+import glob as _glob
+checkpoints = sorted(_glob.glob(os.path.join(OUTPUT_DIR, "checkpoint-*")))
+resume_ckpt = checkpoints[-1] if checkpoints else None
+if resume_ckpt:
+    print(f"从 {resume_ckpt} 恢复训练...")
+trainer_stats = trainer.train(resume_from_checkpoint=resume_ckpt)
 
 # ============================================================
 # 5. 保存
