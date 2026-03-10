@@ -86,9 +86,21 @@ from collections import Counter
 source_counts = Counter(sources)
 print(f"   数据源分布: {dict(source_counts)}")
 
-split = full_dataset.train_test_split(
-    test_size=EVAL_RATIO, seed=SEED, stratify_by_column="source"
-)
+unique_sources = list(source_counts.keys())
+if len(unique_sources) > 1:
+    # 将 source 列转为 ClassLabel 以支持分层抽样
+    from datasets import ClassLabel
+    full_dataset = full_dataset.cast_column(
+        "source", ClassLabel(names=sorted(unique_sources))
+    )
+    split = full_dataset.train_test_split(
+        test_size=EVAL_RATIO, seed=SEED, stratify_by_column="source"
+    )
+else:
+    # 只有一个来源，普通随机拆分即可
+    print(f"   仅单一数据源 '{unique_sources[0]}'，使用随机拆分")
+    split = full_dataset.train_test_split(test_size=EVAL_RATIO, seed=SEED)
+
 dataset = split["train"].remove_columns("source")
 eval_dataset = split["test"].remove_columns("source")
 print(f"   训练集: {len(dataset)} 条，验证集: {len(eval_dataset)} 条（分层抽样）")

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
 合并所有训练数据源，准备最终微调
-v1: GitHub问答 + BAAI金融 + 英文量化指令 (~30k)
+v1: GitHub问答 + BAAI金融(关键词过滤) + 英文量化指令 (~30k)
 v2: 多市场行情技术分析对 (A股+期货+ETF+可转债, ~10k)
 v3: FinGPT + 量化计算 + 推理链增强 (可选)
+v4: BAAI全量中文金融 (~40k，替代v1中的BAAI子集)
 """
 
 import json
@@ -15,7 +16,8 @@ DATA_DIR = os.path.join(PROJECT_ROOT, "training-data")
 OUTPUT = os.path.join(DATA_DIR, "merged_train_v2.jsonl")
 
 sources = [
-    (os.path.join(DATA_DIR, "merged_train.jsonl"), "v1_mixed"),
+    (os.path.join(DATA_DIR, "baai_zh_full.jsonl"), "baai_zh_finance"),
+    (os.path.join(DATA_DIR, "quant-github-generated.jsonl"), "github_quant"),
     (os.path.join(DATA_DIR, "all_market_train.jsonl"), "multi_market_technical"),
     (os.path.join(DATA_DIR, "fingpt_forecaster.jsonl"), "fingpt_forecaster"),
     (os.path.join(DATA_DIR, "quant_calculations.jsonl"), "quant_calculations"),

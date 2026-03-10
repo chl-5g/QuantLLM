@@ -29,8 +29,8 @@ model:
 # LoRA 配置
 # ----------------------------------------------------------
 lora:
-  r: 32
-  alpha: 32
+  r: 16
+  alpha: 16
   dropout: 0
   use_rslora: true
   target_modules:

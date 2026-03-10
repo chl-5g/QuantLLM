@@ -99,13 +99,14 @@ from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, DATA_DIR, OUTPUT_DIR
 │   ├── BAAI_IndustryInstruction_Finance-Economics/
 │   ├── finance-instruct-500k/
 │   ├── quant-trading-instruct/
-│   ├── merged_train.jsonl             #   v1 指令数据 (~30k条)
+│   ├── baai_zh_full.jsonl              #   BAAI全量中文金融 (~40k条)
+│   ├── merged_train.jsonl             #   v1 指令数据 (~30k条，旧版)
 │   ├── quant-github-generated.jsonl   #   GitHub策略问答 (~55条)
 │   ├── all_market_train.jsonl         #   全市场行情训练对 (~10k条)
 │   ├── fingpt_forecaster.jsonl        #   FinGPT 预测数据（1230条）
 │   ├── quant_calculations.jsonl       #   量化计算问答（需ollama生成，可选）
 │   ├── reasoning_enhanced.jsonl       #   推理链增强（需ollama生成，可选）
-│   └── merged_train_v2.jsonl          #   最终训练集（~39k条，含可选数据源后~43k+）
+│   └── merged_train_v2.jsonl          #   最终训练集（~50k条，含可选数据源后~53k+）
 │
 ├── output/                            # 模型输出
 │   ├── quant-qwen2.5-14b-lora/        #   LoRA适配器权重
@@ -160,15 +161,14 @@ from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, DATA_DIR, OUTPUT_DIR
 
 | 数据源 | 条数 | 内容 |
 |--------|------|------|
-| BAAI 中文金融 | ~29,000 | 金融知识、投资分析 |
+| BAAI 全量中文金融 | ~40,300 | 金融知识、投资分析（全量中文提取，不限关键词） |
 | 多市场行情分析 | ~8,900 | A股/期货/ETF/可转债技术分析（含【市场】前缀） |
-| 英文量化指令 | 386 | 策略代码和回测 |
-| GitHub策略问答 | 55 | 高质量代码解读 |
 | FinGPT 预测数据 | 1,230 | 道琼斯30股票趋势预测（英文） |
+| GitHub策略问答 | 38 | 高质量代码解读（去重后） |
 | 量化计算（可选） | ~500 | 风险指标/期权定价/组合优化（需ollama生成） |
 | 推理链增强（可选） | ~2,000 | 带 `<think>` 推理过程的高质量对（需ollama生成） |
-| **基础合计** | **~39,000** | **不含可选数据源** |
-| **完整合计** | **~41,500+** | **含可选数据源** |
+| **基础合计** | **~50,400** | **不含可选数据源** |
+| **完整合计** | **~53,000+** | **含可选数据源** |
 
 ### Step 4: 模型训练 (`run.sh train`)
 
