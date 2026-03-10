@@ -101,7 +101,7 @@ def gen_technical_analysis(symbol, market_label, row, prev_row=None):
     ma_diff_pct = (row["close"] - row["close_ma_20"]) / row["close_ma_20"] * 100 if row["close_ma_20"] != 0 else 0
 
     question = (
-        f"{symbol} 在 {row['date']} 的技术指标如下：\n"
+        f"【{market_label}】{symbol} 在 {row['date']} 的技术指标如下：\n"
         f"- 收盘价 {row['close']}，当日涨跌 {change:+.2f}%\n"
         f"- RSI(14) = {row['rsi_14']}\n"
         f"- MACD柱线 = {row['macd_histogram']}，信号线 = {row['signal_line']}\n"
@@ -168,7 +168,7 @@ def gen_trend_analysis(symbol, market_label, rows):
         data_lines.append(f"  {r['date']}: 开{r['open']} 高{r['high']} 低{r['low']} 收{r['close']} 量{r['volume']:,}")
 
     question = (
-        f"以下是{market_label}标的 {symbol} 最近5个交易日的行情数据：\n"
+        f"【{market_label}】以下是{market_label}标的 {symbol} 最近5个交易日的行情数据：\n"
         + "\n".join(data_lines)
         + f"\n请判断短期趋势方向，并给出操作建议。"
     )
@@ -217,7 +217,7 @@ def gen_futures_basis_analysis(symbol, rows):
     vol_change = (vols[-1] - vols[0]) / vols[0] * 100 if vols[0] != 0 else 0
 
     question = (
-        f"商品期货 {symbol} 近5个交易日情况：\n"
+        f"【商品期货】商品期货 {symbol} 近5个交易日情况：\n"
         f"- 价格从 {closes[0]} 变动到 {closes[-1]}（{change:+.1f}%）\n"
         f"- 成交量变动：{vol_change:+.1f}%\n"
         f"- 最新RSI(14) = {recent[-1]['rsi_14']}\n"
@@ -292,7 +292,7 @@ def gen_futures_seasonality(symbol, rows):
     worst_month = min(avg_by_month, key=avg_by_month.get)
 
     question = (
-        f"请分析商品期货 {symbol} 的历史月度表现规律。"
+        f"【商品期货】请分析商品期货 {symbol} 的历史月度表现规律。"
         f"该品种有 {len(rows)} 个交易日的历史数据。"
     )
 
@@ -336,7 +336,7 @@ def gen_etf_tracking_analysis(symbol, rows):
     drawdown = (closes[-1] - max_close) / max_close * 100
 
     question = (
-        f"ETF {symbol} 近20个交易日表现如下：\n"
+        f"【ETF基金】ETF {symbol} 近20个交易日表现如下：\n"
         f"- 区间收益率: {total_return:+.2f}%\n"
         f"- 区间最大回撤: {drawdown:.2f}%\n"
         f"- 年化波动率: {volatility:.1f}%\n"
@@ -386,7 +386,7 @@ def gen_cbond_analysis(symbol, rows):
     price = latest["close"]
 
     question = (
-        f"可转债 {symbol} 当前价格 {price}，RSI(14)={latest['rsi_14']}，"
+        f"【可转债】可转债 {symbol} 当前价格 {price}，RSI(14)={latest['rsi_14']}，"
         f"MACD柱线={latest['macd_histogram']}。\n"
         f"近10日价格区间: {min(closes):.2f} ~ {max(closes):.2f}\n"
         f"请分析该转债的投资价值和风险。"
@@ -448,7 +448,7 @@ def gen_cbond_strategy(symbol, rows):
     recent_vol = np.std([r["close"] for r in rows[-20:]]) / np.mean([r["close"] for r in rows[-20:]]) * 100
 
     question = (
-        f"请介绍可转债的'双低策略'，并以 {symbol}（当前价 {price}）为例分析是否符合双低条件。"
+        f"【可转债】请介绍可转债的'双低策略'，并以 {symbol}（当前价 {price}）为例分析是否符合双低条件。"
     )
 
     answer = (

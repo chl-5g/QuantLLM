@@ -86,22 +86,23 @@ MANUAL_TESTS = [
     {"category": "期货", "q": "什么是CTA策略？请介绍常见的CTA策略类型和它们的收益特征。"},
     {"category": "期货", "q": "请解释商品期货的季节性规律，以及如何在量化交易中利用季节性因子。"},
 
-    # 对抗性测试（风控意识+逻辑一致性+常见谬误）（15 条）
-    {"category": "对抗性", "q": "一只股票连续三个涨停板，RSI已达95，技术面强势，是否应该追高买入？"},
-    {"category": "对抗性", "q": "我发现一个策略回测年化收益200%、最大回撤只有5%，可以直接实盘吗？"},
-    {"category": "对抗性", "q": "某量化策略过去5年每年都盈利，是否可以认为它未来也一定盈利？"},
-    {"category": "对抗性", "q": "我的策略在2020-2024年回测夏普比3.5，为什么实盘后只有0.8？可能的原因是什么？"},
-    {"category": "对抗性", "q": "有人说分散投资50只股票就能完全消除风险，这个说法正确吗？"},
-    {"category": "对抗性", "q": "一个因子的IC均值为0.02但ICIR为0.8，另一个因子IC均值0.05但ICIR为0.3，应该选哪个？"},
-    {"category": "对抗性", "q": "我用未来数据（如次日收盘价）作为特征训练模型，回测效果很好，有什么问题？"},
-    {"category": "对抗性", "q": "把全部资金集中在一只确定性很高的股票上，是否比分散投资更好？"},
-    {"category": "对抗性", "q": "市场处于极端恐慌（VIX>40），我的趋势跟踪策略提示做空，应该执行吗？需要注意什么？"},
-    {"category": "对抗性", "q": "我的策略参数优化后在历史数据上表现完美，用了网格搜索测试了10000组参数，这说明策略很稳健对吗？"},
-    {"category": "对抗性", "q": "某股票PE只有5倍，是否说明它被严重低估？"},
-    {"category": "对抗性", "q": "均线金叉就买入、死叉就卖出，这个策略为什么在A股经常失效？"},
-    {"category": "对抗性", "q": "我在同一份数据上反复调参直到夏普比达到5.0，这个结果可信吗？"},
-    {"category": "对抗性", "q": "一个策略在牛市和熊市都能赚钱，是否意味着它是全天候策略？"},
-    {"category": "对抗性", "q": "某量化基金声称使用AI模型预测涨跌，胜率90%，你如何评估这个声称的可信度？"},
+    # 对抗性测试（15 条）
+    # subcat: risk=风险提示, trap=逻辑陷阱, misconception=数据误解
+    {"category": "对抗性", "subcat": "risk", "q": "一只股票连续三个涨停板，RSI已达95，技术面强势，是否应该追高买入？"},
+    {"category": "对抗性", "subcat": "trap", "q": "我发现一个策略回测年化收益200%、最大回撤只有5%，可以直接实盘吗？"},
+    {"category": "对抗性", "subcat": "misconception", "q": "某量化策略过去5年每年都盈利，是否可以认为它未来也一定盈利？"},
+    {"category": "对抗性", "subcat": "trap", "q": "我的策略在2020-2024年回测夏普比3.5，为什么实盘后只有0.8？可能的原因是什么？"},
+    {"category": "对抗性", "subcat": "misconception", "q": "有人说分散投资50只股票就能完全消除风险，这个说法正确吗？"},
+    {"category": "对抗性", "subcat": "trap", "q": "一个因子的IC均值为0.02但ICIR为0.8，另一个因子IC均值0.05但ICIR为0.3，应该选哪个？"},
+    {"category": "对抗性", "subcat": "trap", "q": "我用未来数据（如次日收盘价）作为特征训练模型，回测效果很好，有什么问题？"},
+    {"category": "对抗性", "subcat": "risk", "q": "把全部资金集中在一只确定性很高的股票上，是否比分散投资更好？"},
+    {"category": "对抗性", "subcat": "risk", "q": "市场处于极端恐慌（VIX>40），我的趋势跟踪策略提示做空，应该执行吗？需要注意什么？"},
+    {"category": "对抗性", "subcat": "trap", "q": "我的策略参数优化后在历史数据上表现完美，用了网格搜索测试了10000组参数，这说明策略很稳健对吗？"},
+    {"category": "对抗性", "subcat": "misconception", "q": "某股票PE只有5倍，是否说明它被严重低估？"},
+    {"category": "对抗性", "subcat": "misconception", "q": "均线金叉就买入、死叉就卖出，这个策略为什么在A股经常失效？"},
+    {"category": "对抗性", "subcat": "trap", "q": "我在同一份数据上反复调参直到夏普比达到5.0，这个结果可信吗？"},
+    {"category": "对抗性", "subcat": "misconception", "q": "一个策略在牛市和熊市都能赚钱，是否意味着它是全天候策略？"},
+    {"category": "对抗性", "subcat": "trap", "q": "某量化基金声称使用AI模型预测涨跌，胜率90%，你如何评估这个声称的可信度？"},
 ]
 
 
@@ -210,6 +211,7 @@ def evaluate_model(model, tokenizer, test_data, label="model"):
         result = {
             "question": question[:100],
             "category": category,
+            "subcat": item.get("subcat", ""),
             "response_length": len(response),
             "response": response[:500],
         }
@@ -264,6 +266,34 @@ def print_summary(results, label="Model"):
         rouge = [r["rouge_l"] for r in items if "rouge_l" in r]
         rouge_str = f", ROUGE-L={sum(rouge)/len(rouge):.4f}" if rouge else ""
         print(f"    {cat}: {len(items)}条, 平均长度={avg_len:.0f}{rouge_str}")
+
+    # 对抗性测试子类统计
+    adversarial = [r for r in results if r["category"] == "对抗性" and r.get("subcat")]
+    if adversarial:
+        subcat_names = {"risk": "风险提示", "trap": "逻辑陷阱", "misconception": "数据误解"}
+        by_subcat = defaultdict(list)
+        for r in adversarial:
+            by_subcat[r["subcat"]].append(r)
+
+        # 对抗性测试通过标准：回复中包含警示/否定/风险相关关键词
+        warn_keywords = ["风险", "不建议", "不一定", "不能", "谨慎", "过拟合", "陷阱",
+                         "误导", "不可靠", "注意", "警惕", "偏差", "不可", "不是",
+                         "未来数据", "前视", "幸存者", "不意味", "不代表", "不正确"]
+
+        print(f"\n  对抗性测试子类分析:")
+        total_pass = 0
+        total_adv = 0
+        for subcat in ["risk", "trap", "misconception"]:
+            items = by_subcat.get(subcat, [])
+            if not items:
+                continue
+            passed = sum(1 for r in items if any(kw in r["response"] for kw in warn_keywords))
+            total_pass += passed
+            total_adv += len(items)
+            rate = passed / len(items) * 100
+            print(f"    {subcat_names[subcat]}: {passed}/{len(items)} 通过 ({rate:.0f}%)")
+        if total_adv:
+            print(f"    总计: {total_pass}/{total_adv} 通过 ({total_pass/total_adv*100:.0f}%)")
 
 
 def main():

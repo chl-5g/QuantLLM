@@ -78,3 +78,56 @@ MODEL_NAME = cfg["model"]["base_model"]
 MAX_SEQ_LENGTH = cfg["model"]["max_seq_length"]
 SYSTEM_PROMPT = cfg["system_prompt"]
 OLLAMA_URL = cfg["ollama"]["url"]
+
+
+# ============================================================
+# ollama 统一调用（带健康检查+重试）
+# ============================================================
+def call_ollama(model, messages, temperature=0.7, num_predict=4096,
+                max_retries=3, timeout=None, strip_think=False):
+    """
+    统一的 ollama 调用函数。
+    model: 模型名称（如 qwen3:14b, deepseek-r1:32b）
+    messages: [{"role": "user", "content": "..."}]
+    strip_think: 是否去除 <think> 标签（qwen3 场景）
+    返回 content 字符串，失败返回 None
+    """
+    import time
+    import requests as _requests
+
+    if timeout is None:
+        timeout = cfg["ollama"].get("timeout", 180)
+
+    # 健康检查
+    base_url = OLLAMA_URL.rsplit("/", 2)[0]  # http://127.0.0.1:11434
+    try:
+        _requests.get(f"{base_url}/api/tags", timeout=5)
+    except Exception:
+        print("[OLLAMA] 服务未运行或无法连接，请先启动 ollama", file=sys.stderr)
+        return None
+
+    for attempt in range(max_retries):
+        try:
+            resp = _requests.post(
+                OLLAMA_URL,
+                json={
+                    "model": model,
+                    "messages": messages,
+                    "stream": False,
+                    "options": {"temperature": temperature, "num_predict": num_predict},
+                },
+                timeout=timeout,
+            )
+            resp.raise_for_status()
+            content = resp.json()["message"]["content"]
+            if strip_think and "<think>" in content:
+                content = content.split("</think>")[-1].strip()
+            return content
+        except Exception as e:
+            if attempt < max_retries - 1:
+                wait = 5 * (attempt + 1)
+                print(f"  [OLLAMA] 重试 ({attempt+1}/{max_retries}): {e}，{wait}s后重试...")
+                time.sleep(wait)
+            else:
+                print(f"  [OLLAMA] 调用失败（已重试{max_retries}次）: {e}")
+                return None
