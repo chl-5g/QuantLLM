@@ -91,3 +91,24 @@ eval:
   holdout_ratio: 0.02
   max_holdout: 100
   results_file: output/eval_results.json
+
+# ----------------------------------------------------------
+# 模拟盘风控配置（Phase 2）
+# ----------------------------------------------------------
+risk_control:
+  # 仓位控制
+  max_position_pct: 0.10              # 单票最大仓位占总资产比例
+  max_total_position_pct: 0.80        # 总仓位上限
+  # 止损/止盈
+  stop_loss_pct: -0.05               # 单票止损线（-5%）
+  portfolio_stop_loss_pct: -0.30     # 组合止损线（亏30%清仓暂停，即70%A）
+  take_profit_target: 2.0            # 目标净值倍数（翻倍止盈，提取利润）
+  # 日度限制
+  max_daily_loss_pct: -0.03          # 单日最大亏损（-3%触发暂停）
+  max_daily_trades: 5                # 单日最大交易笔数
+  # 市场环境
+  turbulence_threshold: 3.0          # 波动率异常倍数（>3σ自动减仓）
+  # 交易成本仿真
+  slippage_pct: 0.0003               # 滑点（万分之三）
+  commission_pct: 0.00025            # 佣金（万分之二点五）
+  volume_limit_pct: 0.05             # 成交量限制（不超过当日总量5%）

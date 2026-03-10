@@ -78,13 +78,20 @@ def format_chatml(record):
     return text
 
 texts = [format_chatml(r) for r in records]
-full_dataset = Dataset.from_dict({"text": texts})
+sources = [r.get("source", "unknown") for r in records]
+full_dataset = Dataset.from_dict({"text": texts, "source": sources})
 
-# 划分训练集/验证集
-split = full_dataset.train_test_split(test_size=EVAL_RATIO, seed=SEED)
-dataset = split["train"]
-eval_dataset = split["test"]
-print(f"   训练集: {len(dataset)} 条，验证集: {len(eval_dataset)} 条")
+# 分层抽样：确保每个数据源在验证集中都有代表性
+from collections import Counter
+source_counts = Counter(sources)
+print(f"   数据源分布: {dict(source_counts)}")
+
+split = full_dataset.train_test_split(
+    test_size=EVAL_RATIO, seed=SEED, stratify_by_column="source"
+)
+dataset = split["train"].remove_columns("source")
+eval_dataset = split["test"].remove_columns("source")
+print(f"   训练集: {len(dataset)} 条，验证集: {len(eval_dataset)} 条（分层抽样）")
 
 # ============================================================
 # 4. 训练
@@ -113,7 +120,9 @@ trainer = SFTTrainer(
         eval_steps=tcfg["eval_steps"],
         eval_strategy="steps",
         optim=tcfg["optim"],
+        lr_scheduler_type="cosine",
         seed=SEED,
+        logging_dir=os.path.join(OUTPUT_DIR, "logs"),
         report_to="none",
         load_best_model_at_end=True,
         metric_for_best_model="eval_loss",
@@ -151,3 +160,22 @@ print(f"\n训练完成！")
 print(f"  训练时长: {trainer_stats.metrics['train_runtime']:.0f} 秒")
 print(f"  训练损失: {trainer_stats.metrics['train_loss']:.4f}")
 print(f"  模型保存: {OUTPUT_DIR}")
+
+# 保存训练日志到文件
+log_file = os.path.join(OUTPUT_DIR, "training_log.txt")
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+with open(log_file, "w", encoding="utf-8") as lf:
+    lf.write("=" * 60 + "\n")
+    lf.write("QuantLLM 训练日志\n")
+    lf.write("=" * 60 + "\n\n")
+    lf.write(f"模型: {MODEL_NAME}\n")
+    lf.write(f"LoRA: r={cfg['lora']['r']}, alpha={cfg['lora']['alpha']}, rslora={cfg['lora'].get('use_rslora')}\n")
+    lf.write(f"训练集: {len(dataset)} 条，验证集: {len(eval_dataset)} 条\n")
+    lf.write(f"Epochs: {cfg['training']['num_train_epochs']}, LR: {cfg['training']['learning_rate']}\n")
+    lf.write(f"调度: cosine, Warmup: {cfg['training']['warmup_steps']} steps\n\n")
+    for entry in trainer.state.log_history:
+        lf.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    lf.write(f"\n最终指标:\n")
+    for k, v in trainer_stats.metrics.items():
+        lf.write(f"  {k}: {v}\n")
+print(f"  训练日志: {log_file}")

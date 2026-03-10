@@ -49,7 +49,8 @@ with open(OUTPUT, "w", encoding="utf-8") as out:
                     # 保留 reasoning 版本（后加载覆盖前面的）
                     if label == "reasoning_enhanced" and h and h in seen_hashes:
                         # 这是增强版，保留它（但不重复计数）
-                        out.write(line)
+                        record["source"] = label
+                        out.write(json.dumps(record, ensure_ascii=False) + "\n")
                         count += 1
                         dedup_count += 1
                         continue
@@ -60,7 +61,8 @@ with open(OUTPUT, "w", encoding="utf-8") as out:
                             continue
                         seen_hashes.add(h)
 
-                    out.write(line)
+                    record["source"] = label
+                    out.write(json.dumps(record, ensure_ascii=False) + "\n")
                     count += 1
         except FileNotFoundError:
             print(f"[SKIP] {path} 不存在（可选数据源，跳过）")
