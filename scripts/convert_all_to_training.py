@@ -318,6 +318,144 @@ def gen_futures_seasonality(symbol, rows):
     )
     return question, answer
 
+
+def gen_futures_hedging(symbol, rows):
+    """期货：套保策略分析"""
+    if len(rows) < 20:
+        return None, None
+
+    recent = rows[-20:]
+    closes = [r["close"] for r in recent]
+    returns = [(closes[i] - closes[i-1]) / closes[i-1] for i in range(1, len(closes))]
+    volatility = np.std(returns) * np.sqrt(252) * 100
+    total_return = (closes[-1] - closes[0]) / closes[0] * 100
+    latest_price = closes[-1]
+
+    # 模拟现货升贴水
+    rng = random.Random(hash(f"{symbol}_hedge_{rows[-1]['date']}"))
+    basis_pct = rng.uniform(-3, 3)  # 基差率 -3% ~ +3%
+    spot_price = round(latest_price * (1 + basis_pct / 100), 2)
+
+    question = (
+        f"【商品期货·套保】企业持有 {symbol} 相关现货库存，当前情况：\n"
+        f"- 现货价格（估）: {spot_price}\n"
+        f"- 期货最新价: {latest_price}\n"
+        f"- 基差率: {basis_pct:+.2f}%（{'现货升水' if basis_pct > 0 else '期货升水'}）\n"
+        f"- 近20日期货波动率: {volatility:.1f}%\n"
+        f"- 近20日期货涨跌: {total_return:+.2f}%\n"
+        f"请分析该品种的套保策略建议。"
+    )
+
+    if basis_pct > 1.5:
+        basis_view = "当前现货升水明显（基差为正），期货相对便宜"
+        hedge_timing = "现货升水环境下，卖出套保的基差风险较小，是建立空头套保的较好时机"
+        strategy = "卖出套保（空头套保）"
+    elif basis_pct < -1.5:
+        basis_view = "当前期货升水明显（基差为负），期货相对较贵"
+        hedge_timing = "期货升水时卖出套保可能获得基差收益，但需警惕升水扩大的风险"
+        strategy = "卖出套保（空头套保），同时关注基差回归"
+    else:
+        basis_view = "当前基差较小，现货与期货价格接近"
+        hedge_timing = "基差较窄时套保成本低，适合建仓"
+        strategy = "根据企业实际敞口方向选择买入或卖出套保"
+
+    hedge_ratio = round(min(1.0, 0.7 + volatility / 200), 2)
+
+    answer = (
+        f"**{symbol} 套保分析**\n\n"
+        f"**基差状态**：{basis_view}。\n\n"
+        f"**套保时机**：{hedge_timing}。\n\n"
+        f"**建议策略**：{strategy}\n"
+        f"- 建议套保比率：{hedge_ratio}（波动率越高，套保比率应越接近1）\n"
+        f"- 套保周期：根据现货库存周转周期，建议1-3个月合约\n"
+        f"- 展期策略：{'价差结构有利于正向展期' if basis_pct > 0 else '注意展期成本，期货升水会增加持仓成本'}\n\n"
+        f"**风险提示**：\n"
+        f"- 套保是锁定利润/成本的工具，不以期货端盈利为目标\n"
+        f"- 基差波动可能导致套保效果偏离预期\n"
+        f"- 需根据现货端实际销售/采购节奏动态调整期货仓位\n\n"
+        f"*套保策略需结合企业实际经营情况，建议咨询专业期货公司。*"
+    )
+    return question, answer
+
+
+def gen_futures_spread(symbol, rows):
+    """期货：跨品种/跨期套利分析"""
+    if len(rows) < 30:
+        return None, None
+
+    recent = rows[-20:]
+    closes = [r["close"] for r in recent]
+    total_return = (closes[-1] - closes[0]) / closes[0] * 100
+
+    # 产业链关联品种映射
+    SPREAD_PAIRS = {
+        "螺纹钢": ("铁矿石", "利润套利", "钢厂利润 = 螺纹钢价 - 1.6×铁矿石价 - 焦炭成本"),
+        "热卷": ("螺纹钢", "品种价差", "卷螺价差反映板材vs建材需求差异"),
+        "豆粕": ("豆油", "压榨利润", "大豆压榨利润 = 豆粕×0.785 + 豆油×0.185 - 大豆价"),
+        "豆油": ("棕榈油", "油脂价差", "豆棕价差反映植物油间替代关系"),
+        "PTA": ("乙二醇", "聚酯成本", "聚酯成本端两大原料的相对强弱"),
+        "甲醇": ("PP", "MTO利润", "MTO利润 = PP价 - 3×甲醇价"),
+    }
+
+    rng = random.Random(hash(f"{symbol}_spread_{rows[-1]['date']}"))
+
+    # 尝试匹配关联品种
+    matched = None
+    sym_clean = symbol.replace("主力", "").replace("连续", "")
+    for k, v in SPREAD_PAIRS.items():
+        if k in sym_clean:
+            matched = (k, v[0], v[1], v[2])
+            break
+
+    if matched:
+        base, pair, spread_type, formula = matched
+        spread_change = rng.uniform(-5, 5)
+        spread_level = "高位" if spread_change > 2 else "低位" if spread_change < -2 else "中性"
+    else:
+        # 通用跨期套利
+        pair = f"{sym_clean}远月"
+        spread_type = "跨期价差"
+        formula = "近月合约 - 远月合约"
+        spread_change = rng.uniform(-3, 3)
+        spread_level = "升水" if spread_change > 0 else "贴水"
+
+    question = (
+        f"【商品期货·套利】{symbol} 近期走势：近20日涨跌 {total_return:+.2f}%。\n"
+        f"关联品种：{pair}，套利类型：{spread_type}\n"
+        f"价差公式：{formula}\n"
+        f"近期价差变动：{spread_change:+.2f}%\n"
+        f"请分析当前的套利机会。"
+    )
+
+    if abs(spread_change) > 3:
+        opportunity = "价差偏离较大，存在均值回归的套利机会"
+        action = f"{'做空价差（卖近买远/卖强买弱）' if spread_change > 3 else '做多价差（买近卖远/买强卖弱）'}"
+        confidence = "中高"
+    elif abs(spread_change) > 1.5:
+        opportunity = "价差有一定偏离，可关注但未到极端"
+        action = "小仓位试探性建仓，等待价差进一步扩大后加仓"
+        confidence = "中等"
+    else:
+        opportunity = "价差在正常波动范围内，套利空间有限"
+        action = "暂时观望，等待价差偏离到合理区间外再入场"
+        confidence = "偏低"
+
+    answer = (
+        f"**{spread_type}分析：{symbol} vs {pair}**\n\n"
+        f"**价差状态**：当前价差处于{spread_level}，近期变动 {spread_change:+.2f}%。\n\n"
+        f"**套利机会**：{opportunity}。\n\n"
+        f"**操作建议**：\n"
+        f"- 方向：{action}\n"
+        f"- 置信度：{confidence}\n"
+        f"- 仓位：套利仓位不宜超过总资金的30%\n"
+        f"- 止损：价差继续反向扩大{'3%' if abs(spread_change) > 3 else '5%'}时止损\n\n"
+        f"**产业逻辑**：{formula}。价差的驱动因素包括供需结构变化、"
+        f"库存周期、产能利用率和季节性需求波动。\n\n"
+        f"*套利交易虽然风险低于单边投机，但仍可能出现极端行情导致价差持续扩大，务必设好止损。*"
+    )
+    return question, answer
+
+
 # ============================================================
 # ETF 专属模板
 # ============================================================
@@ -370,6 +508,150 @@ def gen_etf_tracking_analysis(symbol, rows):
         f"*ETF投资需关注跟踪标的的基本面变化和市场风格切换。*"
     )
     return question, answer
+
+
+def gen_etf_comparison(symbol, rows):
+    """ETF：绩效归因与同类比较"""
+    if len(rows) < 60:
+        return None, None
+
+    closes = [r["close"] for r in rows[-60:]]
+    returns = [(closes[i] - closes[i-1]) / closes[i-1] for i in range(1, len(closes))]
+    total_return = (closes[-1] - closes[0]) / closes[0] * 100
+    volatility = np.std(returns) * np.sqrt(252) * 100
+    avg_return = np.mean(returns) * 252 * 100  # 年化
+
+    # 计算最大回撤
+    peak = closes[0]
+    max_dd = 0
+    for c in closes:
+        if c > peak:
+            peak = c
+        dd = (c - peak) / peak * 100
+        if dd < max_dd:
+            max_dd = dd
+
+    # 夏普率（假设无风险利率2%）
+    rf_daily = 0.02 / 252
+    excess_returns = [r - rf_daily for r in returns]
+    sharpe = np.mean(excess_returns) / np.std(excess_returns) * np.sqrt(252) if np.std(excess_returns) > 0 else 0
+
+    # 模拟同类ETF表现
+    rng = random.Random(hash(f"{symbol}_comp_{rows[-1]['date']}"))
+    peer_return = total_return + rng.uniform(-5, 5)
+    bench_return = total_return + rng.uniform(-3, 3)
+
+    question = (
+        f"【ETF基金·绩效】ETF {symbol} 近60个交易日（约3个月）表现：\n"
+        f"- 区间收益率: {total_return:+.2f}%\n"
+        f"- 年化波动率: {volatility:.1f}%\n"
+        f"- 最大回撤: {max_dd:.2f}%\n"
+        f"- 夏普比率: {sharpe:.2f}\n"
+        f"- 同类ETF平均收益: {peer_return:+.2f}%\n"
+        f"- 基准指数收益: {bench_return:+.2f}%\n"
+        f"请对该ETF进行绩效归因分析。"
+    )
+
+    alpha = total_return - bench_return
+    peer_diff = total_return - peer_return
+
+    if alpha > 2:
+        alpha_desc = "显著跑赢基准"
+        alpha_reason = "超额收益可能来自行业配置偏离或个股选择"
+    elif alpha < -2:
+        alpha_desc = "明显跑输基准"
+        alpha_reason = "跟踪偏差较大，需检查成分股权重差异和调仓滞后"
+    else:
+        alpha_desc = "与基准表现接近"
+        alpha_reason = "跟踪误差在合理范围内"
+
+    if sharpe > 1.0:
+        risk_adj = "风险调整后表现优秀"
+    elif sharpe > 0.5:
+        risk_adj = "风险调整后表现尚可"
+    elif sharpe > 0:
+        risk_adj = "风险调整后表现一般"
+    else:
+        risk_adj = "风险调整后为负收益，表现较差"
+
+    answer = (
+        f"**{symbol} 绩效归因分析**\n\n"
+        f"**收益归因**：\n"
+        f"- 绝对收益 {total_return:+.2f}%，{alpha_desc}（超额 {alpha:+.2f}%）\n"
+        f"- {alpha_reason}\n"
+        f"- 相对同类{'领先' if peer_diff > 0 else '落后'} {abs(peer_diff):.2f}%\n\n"
+        f"**风险分析**：\n"
+        f"- 夏普比率 {sharpe:.2f}，{risk_adj}\n"
+        f"- 最大回撤 {max_dd:.2f}%，{'风控能力较强' if abs(max_dd) < 8 else '回撤控制需关注'}\n"
+        f"- 波动率 {volatility:.1f}%，{'低于' if volatility < 20 else '高于'}市场平均\n\n"
+        f"**配置建议**：\n"
+        f"- {'可作为核心配置，定投优先选择' if sharpe > 0.5 and abs(max_dd) < 10 else '建议作为卫星配置，控制比例'}\n"
+        f"- 关注管理费率和流动性（日均成交额），选择同类中费率最低、流动性最好的产品\n\n"
+        f"*过去业绩不预示未来表现，ETF选择需综合考虑跟踪误差、费率和流动性。*"
+    )
+    return question, answer
+
+
+def gen_etf_premium_discount(symbol, rows):
+    """ETF：折溢价与套利分析"""
+    if len(rows) < 10:
+        return None, None
+
+    recent = rows[-10:]
+    latest = recent[-1]
+    closes = [r["close"] for r in recent]
+    avg_vol = np.mean([r["volume"] for r in recent])
+
+    # 模拟IOPV（参考净值）和折溢价
+    rng = random.Random(hash(f"{symbol}_pd_{latest['date']}"))
+    premium_pct = rng.uniform(-2, 2)  # 折溢价率
+    iopv = round(latest["close"] / (1 + premium_pct / 100), 4)
+
+    question = (
+        f"【ETF基金·套利】ETF {symbol} 当前状态：\n"
+        f"- 市场价格: {latest['close']}\n"
+        f"- 参考净值(IOPV): {iopv}\n"
+        f"- 折溢价率: {premium_pct:+.2f}%\n"
+        f"- 近10日平均成交量: {avg_vol:,.0f}\n"
+        f"- RSI(14) = {latest['rsi_14']}\n"
+        f"请分析ETF折溢价状态及套利机会。"
+    )
+
+    if premium_pct > 1.0:
+        status = "溢价状态"
+        arb_type = "溢价套利（申购-卖出）"
+        arb_desc = ("市场价格高于净值，存在溢价套利机会。"
+                    "操作方式：在一级市场按净值申购ETF份额，然后在二级市场按市价卖出。"
+                    f"理论套利空间约 {premium_pct - 0.3:.2f}%（扣除交易成本约0.3%）。")
+    elif premium_pct < -1.0:
+        status = "折价状态"
+        arb_type = "折价套利（买入-赎回）"
+        arb_desc = ("市场价格低于净值，存在折价套利机会。"
+                    "操作方式：在二级市场按市价买入ETF份额，然后在一级市场按净值赎回得到一篮子股票并卖出。"
+                    f"理论套利空间约 {abs(premium_pct) - 0.3:.2f}%（扣除交易成本约0.3%）。")
+    else:
+        status = "折溢价在正常范围内"
+        arb_type = "无明显套利机会"
+        arb_desc = "折溢价在±1%以内，扣除交易成本后无利可图。这是做市商和套利者共同作用的结果，反映市场定价效率较高。"
+
+    liquidity = "流动性充足" if avg_vol > 1000000 else "流动性一般" if avg_vol > 100000 else "流动性偏低"
+
+    answer = (
+        f"**{symbol} 折溢价分析**\n\n"
+        f"**当前状态**：{status}，折溢价率 {premium_pct:+.2f}%。\n\n"
+        f"**套利分析**：\n"
+        f"- 类型：{arb_type}\n"
+        f"- {arb_desc}\n\n"
+        f"**执行条件**：\n"
+        f"- 流动性：{liquidity}，{'可执行大额套利' if avg_vol > 1000000 else '套利规模受限'}\n"
+        f"- 最低申赎单位通常为50万份或100万份，个人投资者门槛较高\n"
+        f"- 套利窗口可能瞬间消失，需要交易系统支持快速执行\n\n"
+        f"**普通投资者参考**：\n"
+        f"- {'当前溢价较高，不建议追高买入，可等折溢价回归后再配置' if premium_pct > 1 else '当前折价明显，市价买入相当于打折购买，是配置的好时机' if premium_pct < -1 else '价格合理，可按正常节奏配置'}\n\n"
+        f"*ETF套利需要较高资金门槛和交易速度，普通投资者重点关注折溢价对买入时机的指示意义。*"
+    )
+    return question, answer
+
 
 # ============================================================
 # 可转债专属模板
@@ -892,40 +1174,52 @@ def process_market(market_key, config):
             rows_ctx = rows[max(0, idx-5):idx+1]
 
             if market_key == "futures":
-                if r < 0.20:
+                if r < 0.15:
                     q, a = gen_technical_analysis(symbol, label, row, prev_row)
                     ttype = "technical"
-                elif r < 0.32:
+                elif r < 0.25:
                     q, a = gen_trend_analysis(symbol, label, rows[max(0, idx-4):idx+1])
                     ttype = "trend"
-                elif r < 0.42:
+                elif r < 0.35:
                     q, a = gen_trading_signal(symbol, label, row, prev_row)
                     ttype = "signal"
-                elif r < 0.55:
+                elif r < 0.47:
                     q, a = gen_trading_score(symbol, label, row, rows_ctx, prev_row, all_rows=rows, current_idx=idx)
                     ttype = "score"
-                elif r < 0.78:
+                elif r < 0.62:
                     q, a = gen_futures_basis_analysis(symbol, rows[max(0, idx-10):idx+1])
                     ttype = "futures_basis"
+                elif r < 0.72:
+                    q, a = gen_futures_hedging(symbol, rows[max(0, idx-19):idx+1])
+                    ttype = "futures_hedging"
+                elif r < 0.82:
+                    q, a = gen_futures_spread(symbol, rows[max(0, idx-29):idx+1])
+                    ttype = "futures_spread"
                 else:
                     q, a = gen_futures_seasonality(symbol, rows[:idx+1])
                     ttype = "futures_season"
             elif market_key == "etf":
-                if r < 0.22:
+                if r < 0.15:
                     q, a = gen_technical_analysis(symbol, label, row, prev_row)
                     ttype = "technical"
-                elif r < 0.35:
+                elif r < 0.27:
                     q, a = gen_trend_analysis(symbol, label, rows[max(0, idx-4):idx+1])
                     ttype = "trend"
-                elif r < 0.47:
+                elif r < 0.37:
                     q, a = gen_trading_signal(symbol, label, row, prev_row)
                     ttype = "signal"
-                elif r < 0.62:
+                elif r < 0.50:
                     q, a = gen_trading_score(symbol, label, row, rows_ctx, prev_row, all_rows=rows, current_idx=idx)
                     ttype = "score"
-                else:
+                elif r < 0.65:
                     q, a = gen_etf_tracking_analysis(symbol, rows[max(0, idx-19):idx+1])
                     ttype = "etf_tracking"
+                elif r < 0.80:
+                    q, a = gen_etf_comparison(symbol, rows[max(0, idx-59):idx+1])
+                    ttype = "etf_comparison"
+                else:
+                    q, a = gen_etf_premium_discount(symbol, rows[max(0, idx-9):idx+1])
+                    ttype = "etf_premium"
             elif market_key == "cbond":
                 if r < 0.18:
                     q, a = gen_technical_analysis(symbol, label, row, prev_row)
