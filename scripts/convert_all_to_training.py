@@ -574,11 +574,44 @@ def gen_trading_signal(symbol, market_label, row, prev_row=None):
 # 交易评分模板（0-100 分制，固定输入格式）
 # ============================================================
 
-def gen_trading_score(symbol, market_label, row, rows_context, prev_row=None):
+def _detect_regime(all_rows, current_idx):
+    """
+    从个股历史数据推导牛/熊/震荡环境。
+    用 close vs 120日均线 + 均线方向 近似判断。
+    返回: ("牛市"|"熊市"|"震荡", ma120, ma120_slope_pct)
+    """
+    ma_window = 120
+    if current_idx < ma_window:
+        return "震荡", None, 0
+
+    closes_120 = [all_rows[i]["close"] for i in range(current_idx - ma_window + 1, current_idx + 1)]
+    ma120 = sum(closes_120) / len(closes_120)
+
+    # 均线方向：用 20 日前的 MA120 对比
+    if current_idx >= ma_window + 20:
+        closes_120_prev = [all_rows[i]["close"] for i in range(current_idx - ma_window - 19, current_idx - 19)]
+        ma120_prev = sum(closes_120_prev) / len(closes_120_prev)
+        ma120_slope = (ma120 - ma120_prev) / ma120_prev * 100
+    else:
+        ma120_slope = 0
+
+    current_close = all_rows[current_idx]["close"]
+
+    if current_close > ma120 and ma120_slope > 0.5:
+        return "牛市", round(ma120, 2), round(ma120_slope, 2)
+    elif current_close < ma120 and ma120_slope < -0.5:
+        return "熊市", round(ma120, 2), round(ma120_slope, 2)
+    else:
+        return "震荡", round(ma120, 2), round(ma120_slope, 2)
+
+
+def gen_trading_score(symbol, market_label, row, rows_context, prev_row=None,
+                      all_rows=None, current_idx=None):
     """
     生成交易评分训练样本（0-100分制）。
-    固定输入格式：[MARKET_DATA] [POSITION] [PORTFOLIO] 分段标记。
+    固定输入格式：[MARKET_DATA] [MARKET_REGIME] [POSITION] [PORTFOLIO] 分段标记。
     输出 JSON：score + reasons + risk_factors。
+    牛市倾向激进买入（加分），熊市倾向保守（减分）。
     """
     rsi = row["rsi_14"]
     macd_hist = row["macd_histogram"]
@@ -588,6 +621,16 @@ def gen_trading_score(symbol, market_label, row, rows_context, prev_row=None):
     change = calc_change_pct(row["close"], row["open"])
     vol_ratio = row["volume"] / row["volume_ma_5"] if row["volume_ma_5"] > 0 else 1.0
     ma_diff_pct = (row["close"] - row["close_ma_20"]) / row["close_ma_20"] * 100 if row["close_ma_20"] != 0 else 0
+
+    # ---- 市场环境判断 ----
+    if all_rows is not None and current_idx is not None:
+        regime, ma120, ma120_slope = _detect_regime(all_rows, current_idx)
+    else:
+        regime, ma120, ma120_slope = "震荡", None, 0
+
+    regime_block = f"[MARKET_REGIME]\nregime: {regime}\n"
+    if ma120 is not None:
+        regime_block += f"ma120: {ma120}\nma120_slope: {ma120_slope:+.2f}%\n"
 
     # 模拟持仓状态（随机生成，让模型学会处理有/无持仓的场景）
     import hashlib
@@ -640,6 +683,7 @@ def gen_trading_score(symbol, market_label, row, rows_context, prev_row=None):
         f"above_ma20: {'true' if above_ma else 'false'}\n"
         f"ma20_diff_pct: {ma_diff_pct:+.1f}%\n"
         f"volume_ratio: {vol_ratio:.2f}\n"
+        f"{regime_block}"
         f"{position_block}"
         f"[PORTFOLIO]\n"
         f"total_assets: {total_assets}\n"
@@ -743,6 +787,20 @@ def gen_trading_score(symbol, market_label, row, rows_context, prev_row=None):
             score -= 5
             risk_factors.append(f"持仓浮亏{pnl_pct:.1f}%，关注止损")
 
+    # ---- 牛熊环境调整 ----
+    # 牛市：激进买入（整体加分），熊市：保守买入（整体减分）
+    if regime == "牛市":
+        regime_adj = 8
+        score += regime_adj
+        reasons.append(f"当前处于牛市环境（MA120向上{ma120_slope:+.1f}%），策略偏激进")
+    elif regime == "熊市":
+        regime_adj = -8
+        score += regime_adj
+        reasons.append(f"当前处于熊市环境（MA120向下{ma120_slope:+.1f}%），策略偏保守")
+        risk_factors.append("熊市环境下需严格止损，控制仓位")
+    else:
+        reasons.append("当前处于震荡市，策略中性")
+
     # 钳制到 [0, 100]
     score = max(0, min(100, score))
 
@@ -844,7 +902,7 @@ def process_market(market_key, config):
                     q, a = gen_trading_signal(symbol, label, row, prev_row)
                     ttype = "signal"
                 elif r < 0.55:
-                    q, a = gen_trading_score(symbol, label, row, rows_ctx, prev_row)
+                    q, a = gen_trading_score(symbol, label, row, rows_ctx, prev_row, all_rows=rows, current_idx=idx)
                     ttype = "score"
                 elif r < 0.78:
                     q, a = gen_futures_basis_analysis(symbol, rows[max(0, idx-10):idx+1])
@@ -863,7 +921,7 @@ def process_market(market_key, config):
                     q, a = gen_trading_signal(symbol, label, row, prev_row)
                     ttype = "signal"
                 elif r < 0.62:
-                    q, a = gen_trading_score(symbol, label, row, rows_ctx, prev_row)
+                    q, a = gen_trading_score(symbol, label, row, rows_ctx, prev_row, all_rows=rows, current_idx=idx)
                     ttype = "score"
                 else:
                     q, a = gen_etf_tracking_analysis(symbol, rows[max(0, idx-19):idx+1])
@@ -879,7 +937,7 @@ def process_market(market_key, config):
                     q, a = gen_trading_signal(symbol, label, row, prev_row)
                     ttype = "signal"
                 elif r < 0.52:
-                    q, a = gen_trading_score(symbol, label, row, rows_ctx, prev_row)
+                    q, a = gen_trading_score(symbol, label, row, rows_ctx, prev_row, all_rows=rows, current_idx=idx)
                     ttype = "score"
                 elif r < 0.78:
                     q, a = gen_cbond_analysis(symbol, rows[max(0, idx-9):idx+1])
@@ -898,7 +956,7 @@ def process_market(market_key, config):
                     q, a = gen_trading_signal(symbol, label, row, prev_row)
                     ttype = "signal"
                 else:
-                    q, a = gen_trading_score(symbol, label, row, rows_ctx, prev_row)
+                    q, a = gen_trading_score(symbol, label, row, rows_ctx, prev_row, all_rows=rows, current_idx=idx)
                     ttype = "score"
 
             if q and a:
