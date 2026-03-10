@@ -17,7 +17,7 @@
 
 set -e
 
-PROJECT_DIR="/tmp/quant-llm"
+PROJECT_DIR="/opt/quant-llm"
 SCRIPTS_DIR="$PROJECT_DIR/scripts"
 DATA_DIR="$PROJECT_DIR/training-data"
 VENV="$PROJECT_DIR/finetune-env/bin/activate"

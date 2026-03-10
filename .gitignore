@@ -12,9 +12,17 @@ training-data/BAAI_IndustryInstruction_Finance-Economics/
 training-data/finance-instruct-500k/
 training-data/github-repos/
 
-# 模型 checkpoint 和 GGUF（太大）
+# 模型输出（太大，本地保留）
 output/gguf/
-output/quant-qwen2.5-14b-lora/checkpoint-*/
+output/quant-qwen2.5-14b-lora/
+
+# 训练数据 JSONL（可通过脚本重新生成）
+training-data/*.jsonl
+
+# 多市场行情原始数据
+training-data/futures/
+training-data/etf/
+training-data/cbond/
 
 # 进度文件
 *progress.json

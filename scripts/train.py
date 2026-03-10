@@ -2,8 +2,7 @@
 """
 Qwen2.5-14B QLoRA 微调训练脚本
 基座: unsloth/Qwen2.5-14B-bnb-4bit
-数据: /tmp/training-data/merged_train.jsonl (30k 条中文金融+量化)
-输出: /tmp/training-data/output/quant-qwen2.5-14b-lora
+配置: config.yaml
 """
 
 import json
@@ -13,17 +12,17 @@ warnings.filterwarnings("ignore")
 
 from unsloth import FastLanguageModel
 from trl import SFTTrainer
-from transformers import TrainingArguments
+from transformers import TrainingArguments, EarlyStoppingCallback
 from datasets import Dataset
+
+from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, OUTPUT_DIR, DATA_DIR
 
 # ============================================================
 # 配置
 # ============================================================
-MODEL_NAME = "unsloth/Qwen2.5-14B-bnb-4bit"
-MAX_SEQ_LENGTH = 2048
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OUTPUT_DIR = os.path.join(PROJECT_ROOT, "output", "quant-qwen2.5-14b-lora")
-DATA_FILE = os.path.join(PROJECT_ROOT, "training-data", "merged_train_v2.jsonl")
+DATA_FILE = os.path.join(DATA_DIR, "merged_train_v2.jsonl")
+EVAL_RATIO = cfg["training"].get("eval_ratio", 0.02)
+SEED = cfg["training"]["seed"]
 
 # ============================================================
 # 1. 加载模型
@@ -40,17 +39,17 @@ model, tokenizer = FastLanguageModel.from_pretrained(
 # 2. 配置 LoRA
 # ============================================================
 print("2. 配置 LoRA 适配器...")
+lcfg = cfg["lora"]
 model = FastLanguageModel.get_peft_model(
     model,
-    r=32,
-    target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
-                     "gate_proj", "up_proj", "down_proj"],
-    lora_alpha=32,
-    lora_dropout=0,
+    r=lcfg["r"],
+    target_modules=lcfg["target_modules"],
+    lora_alpha=lcfg["alpha"],
+    lora_dropout=lcfg["dropout"],
     bias="none",
     use_gradient_checkpointing="unsloth",  # 节省显存
-    use_rslora=True,  # Rank-Stabilized LoRA，高 rank 时更稳定
-    random_state=42,
+    use_rslora=lcfg.get("use_rslora", True),
+    random_state=SEED,
 )
 
 # 打印可训练参数
@@ -79,8 +78,13 @@ def format_chatml(record):
     return text
 
 texts = [format_chatml(r) for r in records]
-dataset = Dataset.from_dict({"text": texts})
-print(f"   数据条数: {len(dataset)}")
+full_dataset = Dataset.from_dict({"text": texts})
+
+# 划分训练集/验证集
+split = full_dataset.train_test_split(test_size=EVAL_RATIO, seed=SEED)
+dataset = split["train"]
+eval_dataset = split["test"]
+print(f"   训练集: {len(dataset)} 条，验证集: {len(eval_dataset)} 条")
 
 # ============================================================
 # 4. 训练
@@ -88,26 +92,36 @@ print(f"   数据条数: {len(dataset)}")
 print("4. 开始训练...")
 print("=" * 60)
 
+tcfg = cfg["training"]
 trainer = SFTTrainer(
     model=model,
     tokenizer=tokenizer,
     train_dataset=dataset,
+    eval_dataset=eval_dataset,
     args=TrainingArguments(
         output_dir=OUTPUT_DIR,
-        per_device_train_batch_size=1,
-        gradient_accumulation_steps=8,  # 等效 batch_size=8
-        warmup_steps=50,
-        num_train_epochs=1,
-        learning_rate=2e-4,
+        per_device_train_batch_size=tcfg["batch_size"],
+        gradient_accumulation_steps=tcfg["gradient_accumulation_steps"],
+        warmup_steps=tcfg["warmup_steps"],
+        num_train_epochs=tcfg["num_train_epochs"],
+        learning_rate=tcfg["learning_rate"],
         fp16=False,
-        bf16=True,
-        logging_steps=50,
-        save_steps=500,
-        save_total_limit=2,
-        optim="adamw_8bit",
-        seed=42,
+        bf16=tcfg["bf16"],
+        logging_steps=tcfg["logging_steps"],
+        save_steps=tcfg["save_steps"],
+        save_total_limit=tcfg["save_total_limit"],
+        eval_steps=tcfg["eval_steps"],
+        eval_strategy="steps",
+        optim=tcfg["optim"],
+        seed=SEED,
         report_to="none",
+        load_best_model_at_end=True,
+        metric_for_best_model="eval_loss",
+        greater_is_better=False,
     ),
+    callbacks=[EarlyStoppingCallback(
+        early_stopping_patience=tcfg.get("early_stopping_patience", 3),
+    )],
     max_seq_length=MAX_SEQ_LENGTH,
     dataset_text_field="text",
     packing=True,  # 多条短样本打包，提高效率

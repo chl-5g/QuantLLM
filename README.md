@@ -8,16 +8,16 @@
 
 ```bash
 # 一键执行全部流程（数据采集 → 转换 → 合并 → 训练）
-bash /tmp/quant-llm/run.sh
+bash /opt/quant-llm/run.sh
 
 # 或分步执行
-bash /tmp/quant-llm/run.sh crawl     # 仅数据采集
-bash /tmp/quant-llm/run.sh convert   # 仅数据转换
-bash /tmp/quant-llm/run.sh generate  # 数据增强（FinGPT+量化计算+推理链）
-bash /tmp/quant-llm/run.sh merge     # 仅合并训练集
-bash /tmp/quant-llm/run.sh train     # 仅训练
-bash /tmp/quant-llm/run.sh export    # 导出 GGUF
-bash /tmp/quant-llm/run.sh eval      # 模型评估
+bash /opt/quant-llm/run.sh crawl     # 仅数据采集
+bash /opt/quant-llm/run.sh convert   # 仅数据转换
+bash /opt/quant-llm/run.sh generate  # 数据增强（FinGPT+量化计算+推理链）
+bash /opt/quant-llm/run.sh merge     # 仅合并训练集
+bash /opt/quant-llm/run.sh train     # 仅训练
+bash /opt/quant-llm/run.sh export    # 导出 GGUF
+bash /opt/quant-llm/run.sh eval      # 模型评估
 ```
 
 `run.sh` 会自动完成环境检查、依赖验证、GPU 显存释放、数据路径配置等工作，无需手动干预。
@@ -33,11 +33,11 @@ bash /tmp/quant-llm/run.sh eval      # 模型评估
 
 ```bash
 # 创建并激活虚拟环境
-python3 -m venv /tmp/quant-llm/finetune-env
-source /tmp/quant-llm/finetune-env/bin/activate
+python3 -m venv /opt/quant-llm/finetune-env
+source /opt/quant-llm/finetune-env/bin/activate
 
-# 安装依赖
-pip install akshare pandas numpy unsloth trl transformers datasets torch
+# 安装全部依赖
+pip install -r requirements.txt
 ```
 
 如需使用数据增强功能（`run.sh generate`），还需本地运行 [ollama](https://ollama.com/) 并拉取模型：
@@ -47,16 +47,29 @@ ollama pull qwen3:14b        # 量化计算种子扩展
 ollama pull deepseek-r1:32b  # 推理链增强（可选，耗时较长）
 ```
 
+## 配置
+
+所有配置集中在 `config.yaml`，脚本通过 `scripts/_config.py` 读取：
+
+```python
+from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, DATA_DIR, OUTPUT_DIR
+```
+
+主要配置项：数据路径、模型参数、LoRA 配置、训练超参、ollama 地址、评估参数等。详见 `config.yaml` 注释。
+
 ## 项目结构
 
 ```
-/tmp/quant-llm/
+/opt/quant-llm/
 ├── run.sh                             # 一键执行脚本（入口）
+├── config.yaml                        # 中心化配置文件
+├── requirements.txt                   # Python 依赖清单
 ├── README.md                          # 本文件
 ├── LICENSE
 ├── .gitignore
 │
 ├── scripts/                           # 所有 Python 脚本
+│   ├── _config.py                     #   配置加载器（所有脚本共用）
 │   ├── crawl_ashare.py                #   A股全量历史行情爬取
 │   ├── crawl_multi_market.py          #   期货+ETF+可转债行情爬取
 │   ├── generate_training_data.py      #   GitHub量化仓库 → 中文问答对（需ollama）
@@ -67,8 +80,8 @@ ollama pull deepseek-r1:32b  # 推理链增强（可选，耗时较长）
 │   ├── generate_quant_calculations.py #  量化计算种子扩展（60→500条）
 │   ├── add_reasoning_chains.py       #   推理链增强（deepseek-r1:32b）
 │   ├── merge_and_retrain.py          #   合并所有数据源 → 最终训练集
-│   ├── train.py                      #   QLoRA微调训练脚本（Unsloth）
-│   ├── evaluate.py                   #   模型评估（ROUGE-L+结构化指标）
+│   ├── train.py                      #   QLoRA微调训练（early stopping+验证集）
+│   ├── evaluate.py                   #   模型评估（ROUGE-L+结构化+对抗性测试）
 │   └── export_gguf.py                #   导出 GGUF 格式
 │
 ├── training-data/                     # 所有训练数据（.gitignore 忽略）
@@ -155,7 +168,7 @@ ollama pull deepseek-r1:32b  # 推理链增强（可选，耗时较长）
 
 `run.sh train` 会自动释放 ollama 占用的 GPU 显存，然后启动训练。
 
-训练参数:
+训练参数（详见 `config.yaml`）:
 | 参数 | 值 |
 |------|-----|
 | 基座模型 | unsloth/Qwen2.5-14B-bnb-4bit |
@@ -165,13 +178,16 @@ ollama pull deepseek-r1:32b  # 推理链增强（可选，耗时较长）
 | 目标模块 | q/k/v/o/gate/up/down_proj |
 | 学习率 | 2e-4 |
 | Batch size | 1（梯度累积8步，等效 batch_size=8） |
-| Epoch | 1 |
+| Epoch | 3（配合 early stopping） |
+| Early Stopping | patience=3（连续3次eval loss不降则停止） |
+| 验证集比例 | 2% |
+| 验证频率 | 每500步 |
 | 精度 | bf16 |
 | 优化器 | AdamW 8bit |
 | 序列长度 | 2048 |
 | 显存占用 | ~22-23GB |
 
-训练输出: `output/quant-qwen2.5-14b-lora/`（LoRA 适配器权重）
+训练输出: `output/quant-qwen2.5-14b-lora/`（LoRA 适配器权重，自动保留最优 checkpoint）
 
 ### Step 5: 导出 GGUF (`run.sh export`)
 
@@ -180,7 +196,8 @@ ollama pull deepseek-r1:32b  # 推理链增强（可选，耗时较长）
 ### Step 6: 模型评估 (`run.sh eval`)
 
 `scripts/evaluate.py` 批量评估微调模型质量：
-- 50 条手写测试题（覆盖技术分析、策略代码、量化计算、风控、可转债/ETF/期货）
+- 65 条手写测试题（覆盖技术分析、策略代码、量化计算、风控、可转债/ETF/期货 + 15条对抗性测试）
+- 对抗性测试：检验风控意识、过拟合识别、常见投资谬误纠正
 - 从训练集随机抽 2% 作为 holdout 测试集
 - 评估指标：ROUGE-L、平均回复长度、结构化输出率
 - 支持 `--baseline` 参数与基座模型对比
@@ -191,7 +208,7 @@ ollama pull deepseek-r1:32b  # 推理链增强（可选，耗时较长）
 from unsloth import FastLanguageModel
 
 model, tokenizer = FastLanguageModel.from_pretrained(
-    model_name="/tmp/quant-llm/output/quant-qwen2.5-14b-lora",
+    model_name="/opt/quant-llm/output/quant-qwen2.5-14b-lora",
     max_seq_length=2048,
     load_in_4bit=True,
 )

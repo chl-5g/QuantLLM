@@ -1,0 +1,93 @@
+# ============================================================
+# QuantLLM 中心化配置
+# 所有脚本通过 scripts/_config.py 读取本文件
+# ============================================================
+
+# 项目路径（自动检测，通常不需要修改）
+# project_root: /opt/quant-llm
+
+# ----------------------------------------------------------
+# 数据路径
+# ----------------------------------------------------------
+data:
+  training_dir: training-data          # 相对于 project_root
+  ashare_dir: training-data/ashare
+  futures_dir: training-data/futures
+  etf_dir: training-data/etf
+  cbond_dir: training-data/cbond
+
+# ----------------------------------------------------------
+# 模型配置
+# ----------------------------------------------------------
+model:
+  base_model: unsloth/Qwen2.5-14B-bnb-4bit
+  max_seq_length: 2048
+  output_dir: output/quant-qwen2.5-14b-lora
+
+# ----------------------------------------------------------
+# LoRA 配置
+# ----------------------------------------------------------
+lora:
+  r: 32
+  alpha: 32
+  dropout: 0
+  use_rslora: true
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+
+# ----------------------------------------------------------
+# 训练超参
+# ----------------------------------------------------------
+training:
+  batch_size: 1
+  gradient_accumulation_steps: 8       # 等效 batch_size=8
+  learning_rate: 2.0e-4
+  num_train_epochs: 3
+  warmup_steps: 50
+  bf16: true
+  optim: adamw_8bit
+  logging_steps: 50
+  save_steps: 500
+  save_total_limit: 3
+  eval_steps: 500                      # 验证频率
+  eval_ratio: 0.02                     # 验证集比例
+  early_stopping_patience: 3           # 连续 N 次 eval loss 不降则停止
+  seed: 42
+
+# ----------------------------------------------------------
+# Ollama 配置（数据增强用）
+# ----------------------------------------------------------
+ollama:
+  url: http://127.0.0.1:11434/api/chat
+  generation_model: qwen3:14b          # 种子扩展
+  reasoning_model: deepseek-r1:32b     # 推理链增强
+  temperature: 0.7
+  timeout: 180                         # 秒
+
+# ----------------------------------------------------------
+# System Prompt（所有训练数据统一）
+# ----------------------------------------------------------
+system_prompt: 你是一个专业的量化交易专家，擅长策略开发、因子分析、回测评估和风险管理。
+
+# ----------------------------------------------------------
+# 数据转换限制
+# ----------------------------------------------------------
+convert:
+  ashare_limit: 5000
+  futures_limit: 2000
+  etf_limit: 2000
+  cbond_limit: 1500
+
+# ----------------------------------------------------------
+# 评估配置
+# ----------------------------------------------------------
+eval:
+  holdout_ratio: 0.02
+  max_holdout: 100
+  results_file: output/eval_results.json
