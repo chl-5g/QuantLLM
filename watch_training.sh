@@ -3,7 +3,7 @@
 # 用法: bash ~/watch_training.sh
 # 守护模式: bash ~/watch_training.sh --guard（cron 调用）
 
-OUTPUT_DIR="/tmp/quant-llm/output/quant-qwen2.5-14b-lora"
+OUTPUT_DIR="/opt/quant-llm/output/quant-qwen2.5-14b-lora"
 PID_FILE="/tmp/quant-llm/train.pid"
 
 # 找最新的 checkpoint
