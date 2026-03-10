@@ -1,0 +1,3 @@
+{"symbol": "ETF.159162", "date": "2026-03-05", "open": 1.05, "high": 1.06, "low": 1.02, "close": 1.03, "volume": 260324, "rsi_14": 50.2, "macd_line": -0.01, "signal_line": -0.02, "macd_histogram": 0.01, "volume_ma_5": 526929, "close_ma_20": 1.0}
+{"symbol": "ETF.159162", "date": "2026-03-06", "open": 1.02, "high": 1.03, "low": 0.99, "close": 1.01, "volume": 272693, "rsi_14": 46.5, "macd_line": -0.01, "signal_line": -0.01, "macd_histogram": 0.01, "volume_ma_5": 438585, "close_ma_20": 0.99}
+{"symbol": "ETF.159162", "date": "2026-03-09", "open": 0.99, "high": 1.01, "low": 0.96, "close": 1.0, "volume": 321292, "rsi_14": 44.4, "macd_line": -0.01, "signal_line": -0.01, "macd_histogram": 0.01, "volume_ma_5": 346538, "close_ma_20": 0.99}

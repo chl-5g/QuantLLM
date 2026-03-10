@@ -1,14 +1,20 @@
-# 训练数据（太大，不上传）
-training-data/
-
-# 模型输出
-output/
-
 # 虚拟环境
 finetune-env/
 
 # 编译缓存
 unsloth_compiled_cache/
+
+# 行情原始数据（太大）
+training-data/ashare/
+
+# 大型公开数据集（超100MB，需本地下载）
+training-data/BAAI_IndustryInstruction_Finance-Economics/
+training-data/finance-instruct-500k/
+training-data/github-repos/
+
+# 模型 checkpoint 和 GGUF（太大）
+output/gguf/
+output/quant-qwen2.5-14b-lora/checkpoint-*/
 
 # 进度文件
 *progress.json
