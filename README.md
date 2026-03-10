@@ -92,7 +92,8 @@ ollama pull qwen3:14b
 
 **A股历史行情** — `scripts/crawl_ashare.py`
 - 数据源: 东方财富 API（通过 akshare，免费无需 API key）
-- 范围: 主板+创业板+科创板，排除退市股（约5000+只）
+- 范围: 主板+创业板+科创板，包含退市股（分层标注，用于风险预警训练）
+- 分层标注: normal（正常）/ ST / delisting（退市），每条记录含 status 和 name 字段
 - 输出: `training-data/ashare/basic/`（OHLCV）+ `training-data/ashare/advanced/`（含 RSI/MACD/MA）
 - 支持断点续传
 - 预计耗时: 2-3小时

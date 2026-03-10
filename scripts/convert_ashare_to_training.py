@@ -427,6 +427,122 @@ def gen_risk_alert(symbol, row, prev_rows):
     return question, answer
 
 
+def gen_delisting_risk_analysis(symbol, rows, status, name):
+    """模板5：退市/ST股专属风险预警分析"""
+    if len(rows) < 10:
+        return None, None
+
+    window = rows[-10:]
+    closes = [r["close"] for r in window]
+    volumes = [r["volume"] for r in window]
+    rsis = [r["rsi_14"] for r in window]
+
+    # 检测连续跌停（日跌幅 < -9%）
+    limit_down_days = 0
+    for i in range(1, len(closes)):
+        daily_change = (closes[i] - closes[i-1]) / closes[i-1] * 100 if closes[i-1] > 0 else 0
+        if daily_change < -9:
+            limit_down_days += 1
+
+    # 流动性枯竭：末3日均量 vs 前7日均量
+    if len(volumes) >= 10:
+        recent_vol = sum(volumes[-3:]) / 3
+        earlier_vol = sum(volumes[:7]) / 7
+        vol_ratio = recent_vol / earlier_vol if earlier_vol > 0 else 1.0
+    else:
+        vol_ratio = 1.0
+
+    # RSI长期低位
+    avg_rsi = sum(rsis) / len(rsis)
+
+    # 均线空头发散
+    last_row = rows[-1]
+    ma20 = last_row.get("close_ma_20", 0)
+    ma_bearish = ma20 > 0 and last_row["close"] < ma20 * 0.9
+
+    # 总变动
+    total_change = (closes[-1] - closes[0]) / closes[0] * 100 if closes[0] > 0 else 0
+
+    # 构建问题
+    status_label = "退市整理" if status == "delisting" else "ST"
+    question = (
+        f"{name}（{symbol}）当前处于{status_label}状态，近10个交易日数据显示：\n"
+        f"- 股价从 {closes[0]} 变动至 {closes[-1]}（累计 {total_change:+.1f}%）\n"
+        f"- RSI(14) 均值 {avg_rsi:.1f}，最新 {rsis[-1]}\n"
+        f"- 成交量近3日均量为前期的 {vol_ratio:.1%}\n"
+    )
+    if limit_down_days > 0:
+        question += f"- 期间出现 {limit_down_days} 个跌停板\n"
+    question += "请分析该股的退市风险及应对建议。"
+
+    # 构建回答
+    risk_features = []
+    if limit_down_days >= 3:
+        risk_features.append(
+            f"**连续跌停**：近10个交易日出现{limit_down_days}个跌停板，市场对该股退市预期强烈，"
+            "卖单大量堆积但缺乏买方承接，形成典型的退市前单边下跌走势。"
+        )
+    elif limit_down_days >= 1:
+        risk_features.append(
+            f"**多次跌停**：近10个交易日出现{limit_down_days}次跌停，显示市场恐慌情绪蔓延，"
+            "投资者争相出逃。"
+        )
+
+    if vol_ratio < 0.3:
+        risk_features.append(
+            f"**流动性枯竭**：近期成交量仅为此前均量的{vol_ratio:.0%}，极度缩量说明"
+            "买方几乎完全消失，卖出挂单难以成交。在退市整理期，流动性枯竭意味着"
+            "剩余持仓者将面临无法卖出的困境。"
+        )
+    elif vol_ratio < 0.6:
+        risk_features.append(
+            f"**成交萎缩**：近期成交量萎缩至前期的{vol_ratio:.0%}，流动性持续恶化，"
+            "交易对手方稀缺，卖出难度增大。"
+        )
+
+    if avg_rsi < 25:
+        risk_features.append(
+            f"**RSI长期低位**：RSI均值仅{avg_rsi:.1f}，持续处于深度超卖区域。"
+            "但对于退市股而言，超卖不构成反弹依据——基本面恶化驱动的下跌不受技术指标约束。"
+        )
+
+    if ma_bearish:
+        diff_pct = (last_row["close"] - ma20) / ma20 * 100
+        risk_features.append(
+            f"**均线空头发散**：股价低于20日均线{abs(diff_pct):.1f}%，均线系统呈空头排列，"
+            "中期趋势完全转空，无任何技术性支撑。"
+        )
+
+    if not risk_features:
+        risk_features.append(
+            f"该股当前处于{status_label}状态，虽然近期技术指标尚未出现极端恶化，"
+            f"但{status_label}身份本身即为重大风险信号，不可忽视。"
+        )
+
+    risk_text = "\n\n".join(risk_features)
+    answer = (
+        f"**退市风险分析：{name}（{symbol}）**\n\n"
+        f"该股当前处于{status_label}状态，从技术面来看存在以下典型退市前风险特征：\n\n"
+        f"{risk_text}\n\n"
+        "**典型退市前技术形态解读**：\n"
+        "退市股通常呈现以下技术特征组合：(1) 股价持续单边下跌，跌停板频繁出现；"
+        "(2) 成交量极度萎缩，流动性接近枯竭；(3) RSI长期处于20以下的深度超卖区域，"
+        "但不产生有效反弹；(4) 均线系统完全空头排列，各周期均线向下发散。"
+        "这些特征的本质是基本面不可逆恶化在价格上的映射，技术反弹（如有）通常是"
+        "短暂且虚假的。\n\n"
+        "**风险应对建议**：\n"
+        f"1. **立即止损**：{status_label}股基本面已严重恶化，不应抱有侥幸心理等待反弹\n"
+        "2. **远离抄底**：退市股的\u201c低价\u201d不代表价值，股价可能归零\n"
+        "3. **关注退市进程**：了解退市时间表（退市整理期通常为15个交易日），"
+        "在最后交易日前完成清仓\n"
+        "4. **吸取教训**：建立风控体系，对ST/*ST股设置仓位上限和强制止损线，"
+        "避免再次陷入退市困境\n\n"
+        "*重要风险提示：退市股投资风险极高，可能导致本金全部损失。本分析不构成任何投资建议。*"
+    )
+
+    return question, answer
+
+
 # ============================================================
 # 主流程
 # ============================================================
@@ -462,6 +578,10 @@ def main():
             stats["skipped_short"] += 1
             continue
 
+        # 读取 status 和 name（从 JSONL 记录中获取）
+        stock_status = rows[0].get("status", "normal")
+        stock_name = rows[0].get("name", "")
+
         stock_records = []
 
         # 选取有代表性的日期点生成问答
@@ -478,21 +598,34 @@ def main():
             prev_rows = rows[max(0, idx-5):idx]
             prev_row = rows[idx-1] if idx > 0 else None
 
-            # 随机选择一种模板
+            # 根据股票状态选择模板
             template_choice = random.random()
 
-            if template_choice < 0.35:
-                q, a = gen_technical_analysis(symbol, row, prev_row)
-                ttype = "technical_analysis"
-            elif template_choice < 0.55:
-                q, a = gen_trend_analysis(symbol, rows[max(0, idx-4):idx+1])
-                ttype = "trend_analysis"
-            elif template_choice < 0.80:
-                q, a = gen_signal_detection(symbol, row, prev_rows)
-                ttype = "signal_detection"
+            if stock_status in ("delisting", "ST"):
+                # ST/退市股：70% 退市风险模板 + 30% 风险提示模板
+                if template_choice < 0.70:
+                    q, a = gen_delisting_risk_analysis(
+                        symbol, rows[max(0, idx-9):idx+1],
+                        stock_status, stock_name
+                    )
+                    ttype = "delisting_risk"
+                else:
+                    q, a = gen_risk_alert(symbol, row, prev_rows)
+                    ttype = "risk_alert"
             else:
-                q, a = gen_risk_alert(symbol, row, prev_rows)
-                ttype = "risk_alert"
+                # 正常股：沿用现有4个模板
+                if template_choice < 0.35:
+                    q, a = gen_technical_analysis(symbol, row, prev_row)
+                    ttype = "technical_analysis"
+                elif template_choice < 0.55:
+                    q, a = gen_trend_analysis(symbol, rows[max(0, idx-4):idx+1])
+                    ttype = "trend_analysis"
+                elif template_choice < 0.80:
+                    q, a = gen_signal_detection(symbol, row, prev_rows)
+                    ttype = "signal_detection"
+                else:
+                    q, a = gen_risk_alert(symbol, row, prev_rows)
+                    ttype = "risk_alert"
 
             if q and a:
                 record = {

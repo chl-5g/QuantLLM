@@ -140,7 +140,7 @@ def save_progress(progress):
 # 单只股票处理
 # ============================================================
 
-def process_stock(symbol_code, progress):
+def process_stock(symbol_code, progress, status="normal", name=""):
     """获取并处理单只股票数据"""
     symbol = normalize_symbol(symbol_code)
 
@@ -198,6 +198,8 @@ def process_stock(symbol_code, progress):
             for _, row in df.iterrows():
                 record = {
                     "symbol": symbol,
+                    "name": name,
+                    "status": status,
                     "date": row["date"],
                     "open": round(float(row["open"]), 2),
                     "high": round(float(row["high"]), 2),
@@ -219,6 +221,8 @@ def process_stock(symbol_code, progress):
             for _, row in df_adv.iterrows():
                 record = {
                     "symbol": symbol,
+                    "name": name,
+                    "status": status,
                     "date": row["date"],
                     "open": round(float(row["open"]), 2),
                     "high": round(float(row["high"]), 2),
@@ -270,16 +274,30 @@ def main():
             print("备用方案也失败了，退出")
             return
 
-    # 过滤：只要主板 + 创业板 + 科创板（去掉 ST、退市、北交所等）
+    # 过滤：只要主板 + 创业板 + 科创板（保留退市股和ST股，用于风险预警训练）
     filtered_codes = []
+    stock_status = {}  # code -> (status, name)
+    count_normal = 0
+    count_st = 0
+    count_delisting = 0
     for code in codes:
         code = str(code).zfill(6)
         if code.startswith(("0", "3", "6")):
             name = names.get(code, "")
-            if "退" not in name:  # 排除退市股
-                filtered_codes.append(code)
+            if "退" in name:
+                status = "delisting"
+                count_delisting += 1
+            elif "ST" in name:
+                status = "ST"
+                count_st += 1
+            else:
+                status = "normal"
+                count_normal += 1
+            stock_status[code] = (status, name)
+            filtered_codes.append(code)
 
-    print(f"共 {len(filtered_codes)} 只股票（主板+创业板+科创板，排除退市）")
+    print(f"共 {len(filtered_codes)} 只股票（主板+创业板+科创板）")
+    print(f"  正常: {count_normal}, ST: {count_st}, 退市: {count_delisting}")
 
     # 加载进度
     progress = load_progress()
@@ -294,8 +312,8 @@ def main():
         if symbol in progress["done"]:
             continue
 
-        name = names.get(code, "")
-        count = process_stock(code, progress)
+        status, name = stock_status.get(code, ("normal", ""))
+        count = process_stock(code, progress, status=status, name=name)
 
         done_total = len(progress["done"])
         elapsed = time.time() - start_time
