@@ -103,6 +103,21 @@ MANUAL_TESTS = [
     {"category": "对抗性", "subcat": "trap", "q": "我在同一份数据上反复调参直到夏普比达到5.0，这个结果可信吗？"},
     {"category": "对抗性", "subcat": "misconception", "q": "一个策略在牛市和熊市都能赚钱，是否意味着它是全天候策略？"},
     {"category": "对抗性", "subcat": "trap", "q": "某量化基金声称使用AI模型预测涨跌，胜率90%，你如何评估这个声称的可信度？"},
+
+    # 评分合理性测试（6 条）— 验证模型评分方向是否正确
+    # expect_direction: "low"=期望评分≤30, "high"=期望评分≥70
+    {"category": "评分合理性", "expect_direction": "low", "q":
+     "[MARKET_DATA]\nsymbol: 600519\nmarket: A股\ndate: 2025-03-20\nclose: 1950.00\nchange_pct: +9.85%\ntrend_5d: +28.50%\nrsi_14: 95\nmacd_histogram: 85.2\nmacd_cross: 金叉\nabove_ma20: true\nma20_diff_pct: +15.2%\nvolume_ratio: 3.50\n[POSITION]\nholding: true\ncost: 1700.00\npnl_pct: +14.71%\ndays_held: 3\n[PORTFOLIO]\ntotal_assets: 200000\ncash_pct: 0.20\n[END]\n请输出交易评分(0-100)和理由。"},
+    {"category": "评分合理性", "expect_direction": "high", "q":
+     "[MARKET_DATA]\nsymbol: 000858\nmarket: A股\ndate: 2025-03-20\nclose: 85.30\nchange_pct: -2.10%\ntrend_5d: -15.80%\nrsi_14: 12\nmacd_histogram: -5.8\nmacd_cross: 死叉\nabove_ma20: false\nma20_diff_pct: -12.5%\nvolume_ratio: 0.45\n[POSITION]\nholding: false\n[PORTFOLIO]\ntotal_assets: 100000\ncash_pct: 0.80\n[END]\n请输出交易评分(0-100)和理由。"},
+    {"category": "评分合理性", "expect_direction": "low", "q":
+     "[MARKET_DATA]\nsymbol: 601318\nmarket: A股\ndate: 2025-03-20\nclose: 52.00\nchange_pct: -5.20%\ntrend_5d: -18.00%\nrsi_14: 88\nmacd_histogram: -12.3\nmacd_cross: 死叉\nabove_ma20: false\nma20_diff_pct: -8.0%\nvolume_ratio: 2.80\n[POSITION]\nholding: true\ncost: 55.00\npnl_pct: -5.45%\ndays_held: 10\n[PORTFOLIO]\ntotal_assets: 100000\ncash_pct: 0.15\n[END]\n请输出交易评分(0-100)和理由。"},
+    {"category": "评分合理性", "expect_direction": "high", "q":
+     "[MARKET_DATA]\nsymbol: 688981\nmarket: A股\ndate: 2025-03-20\nclose: 120.50\nchange_pct: +0.80%\ntrend_5d: -8.20%\nrsi_14: 18\nmacd_histogram: -2.1\nmacd_cross: 死叉\nabove_ma20: false\nma20_diff_pct: -6.5%\nvolume_ratio: 1.80\n[POSITION]\nholding: false\n[PORTFOLIO]\ntotal_assets: 500000\ncash_pct: 0.70\n[END]\n请输出交易评分(0-100)和理由。"},
+    {"category": "评分合理性", "expect_direction": "neutral", "q":
+     "[MARKET_DATA]\nsymbol: 300750\nmarket: A股\ndate: 2025-03-20\nclose: 210.00\nchange_pct: +0.15%\ntrend_5d: +0.80%\nrsi_14: 50\nmacd_histogram: 0.3\nmacd_cross: 金叉\nabove_ma20: true\nma20_diff_pct: +0.5%\nvolume_ratio: 1.02\n[POSITION]\nholding: false\n[PORTFOLIO]\ntotal_assets: 100000\ncash_pct: 0.50\n[END]\n请输出交易评分(0-100)和理由。"},
+    {"category": "评分合理性", "expect_direction": "low", "q":
+     "[MARKET_DATA]\nsymbol: AG2506\nmarket: 商品期货\ndate: 2025-03-20\nclose: 7850\nchange_pct: +4.50%\ntrend_5d: +12.30%\nrsi_14: 92\nmacd_histogram: 120.5\nmacd_cross: 金叉\nabove_ma20: true\nma20_diff_pct: +9.8%\nvolume_ratio: 4.20\n[POSITION]\nholding: true\ncost: 7200\npnl_pct: +9.03%\ndays_held: 5\n[PORTFOLIO]\ntotal_assets: 200000\ncash_pct: 0.10\n[END]\n请输出交易评分(0-100)和理由。"},
 ]
 
 
@@ -366,6 +381,36 @@ def print_summary(results, label="Model"):
         print(f"\n  回复一致性 (ROUGE-L between rounds):")
         print(f"    平均一致性: {avg_c:.4f}")
         print(f"    低一致性题目 (<0.3): {low_c}/{len(consistency)}")
+
+    # 评分合理性检测
+    score_tests = [r for r in results if r.get("category") == "评分合理性"]
+    if score_tests:
+        import re as _re
+        correct = 0
+        total = 0
+        print(f"\n  评分合理性测试:")
+        for r in score_tests:
+            expect = r.get("expect_direction", "")
+            # 从回复中提取 score 数值
+            match = _re.search(r'"score"\s*:\s*(\d+)', r.get("response", ""))
+            if not match:
+                match = _re.search(r'评分\s*[:：]?\s*(\d+)', r.get("response", ""))
+            if match:
+                score_val = int(match.group(1))
+                if expect == "low":
+                    ok = score_val <= 30
+                elif expect == "high":
+                    ok = score_val >= 70
+                else:  # neutral
+                    ok = 35 <= score_val <= 65
+                total += 1
+                if ok:
+                    correct += 1
+                print(f"    {'✓' if ok else '✗'} 期望{expect}，实际score={score_val}")
+            else:
+                print(f"    ? 未能从回复中提取评分")
+        if total:
+            print(f"    方向符合率: {correct}/{total} ({correct/total*100:.0f}%)")
 
     # 对抗性测试子类统计
     adversarial = [r for r in results if r["category"] == "对抗性" and r.get("subcat")]
