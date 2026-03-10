@@ -467,11 +467,32 @@ def main():
         print_summary(baseline_results, label="基座模型")
         all_results["baseline"] = baseline_results
 
-    # 保存结果
+    # 保存结果（版本化）
     os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+    # 自动确定版本号
+    import glob as _glob
+    existing = _glob.glob(os.path.join(OUTPUT_DIR, "eval_results_v*.json"))
+    version = len(existing) + 1
+    versioned_file = os.path.join(OUTPUT_DIR, f"eval_results_v{version}.json")
+
+    # 附加元信息
+    meta = {
+        "version": version,
+        "date": __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "model_dir": MODEL_DIR,
+        "base_model": BASE_MODEL,
+        "test_count": len(test_data),
+        "consistency_rounds": args.consistency,
+    }
+    all_results["meta"] = meta
+
+    with open(versioned_file, "w", encoding="utf-8") as f:
+        json.dump(all_results, f, ensure_ascii=False, indent=2)
+    # 同时写一份 latest 方便快速查看
     with open(RESULTS_FILE, "w", encoding="utf-8") as f:
         json.dump(all_results, f, ensure_ascii=False, indent=2)
-    print(f"\n结果已保存: {RESULTS_FILE}")
+    print(f"\n结果已保存: {versioned_file} (v{version})")
 
 
 if __name__ == "__main__":
