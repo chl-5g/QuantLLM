@@ -18,6 +18,7 @@ HOLDOUT_FILE = os.path.join(PROJECT_ROOT, "training-data", "eval_holdout.jsonl")
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "output")
 RESULTS_FILE = os.path.join(OUTPUT_DIR, "eval_results.json")
 MODEL_DIR = os.path.join(OUTPUT_DIR, "quant-qwen2.5-14b-lora")
+CAT_SCORE_RATIONALITY = "评分合理性"
 BASE_MODEL = "unsloth/Qwen2.5-14B-bnb-4bit"
 MAX_SEQ_LENGTH = 2048
 
@@ -106,17 +107,17 @@ MANUAL_TESTS = [
 
     # 评分合理性测试（6 条）— 验证模型评分方向是否正确
     # expect_direction: "low"=期望评分≤30, "high"=期望评分≥70
-    {"category": "评分合理性", "expect_direction": "low", "q":
+    {"category": CAT_SCORE_RATIONALITY, "expect_direction": "low", "q":
      "[MARKET_DATA]\nsymbol: 600519\nmarket: A股\ndate: 2025-03-20\nclose: 1950.00\nchange_pct: +9.85%\ntrend_5d: +28.50%\nrsi_14: 95\nmacd_histogram: 85.2\nmacd_cross: 金叉\nabove_ma20: true\nma20_diff_pct: +15.2%\nvolume_ratio: 3.50\n[POSITION]\nholding: true\ncost: 1700.00\npnl_pct: +14.71%\ndays_held: 3\n[PORTFOLIO]\ntotal_assets: 200000\ncash_pct: 0.20\n[END]\n请输出交易评分(0-100)和理由。"},
-    {"category": "评分合理性", "expect_direction": "high", "q":
+    {"category": CAT_SCORE_RATIONALITY, "expect_direction": "high", "q":
      "[MARKET_DATA]\nsymbol: 000858\nmarket: A股\ndate: 2025-03-20\nclose: 85.30\nchange_pct: -2.10%\ntrend_5d: -15.80%\nrsi_14: 12\nmacd_histogram: -5.8\nmacd_cross: 死叉\nabove_ma20: false\nma20_diff_pct: -12.5%\nvolume_ratio: 0.45\n[POSITION]\nholding: false\n[PORTFOLIO]\ntotal_assets: 100000\ncash_pct: 0.80\n[END]\n请输出交易评分(0-100)和理由。"},
-    {"category": "评分合理性", "expect_direction": "low", "q":
+    {"category": CAT_SCORE_RATIONALITY, "expect_direction": "low", "q":
      "[MARKET_DATA]\nsymbol: 601318\nmarket: A股\ndate: 2025-03-20\nclose: 52.00\nchange_pct: -5.20%\ntrend_5d: -18.00%\nrsi_14: 88\nmacd_histogram: -12.3\nmacd_cross: 死叉\nabove_ma20: false\nma20_diff_pct: -8.0%\nvolume_ratio: 2.80\n[POSITION]\nholding: true\ncost: 55.00\npnl_pct: -5.45%\ndays_held: 10\n[PORTFOLIO]\ntotal_assets: 100000\ncash_pct: 0.15\n[END]\n请输出交易评分(0-100)和理由。"},
-    {"category": "评分合理性", "expect_direction": "high", "q":
+    {"category": CAT_SCORE_RATIONALITY, "expect_direction": "high", "q":
      "[MARKET_DATA]\nsymbol: 688981\nmarket: A股\ndate: 2025-03-20\nclose: 120.50\nchange_pct: +0.80%\ntrend_5d: -8.20%\nrsi_14: 18\nmacd_histogram: -2.1\nmacd_cross: 死叉\nabove_ma20: false\nma20_diff_pct: -6.5%\nvolume_ratio: 1.80\n[POSITION]\nholding: false\n[PORTFOLIO]\ntotal_assets: 500000\ncash_pct: 0.70\n[END]\n请输出交易评分(0-100)和理由。"},
-    {"category": "评分合理性", "expect_direction": "neutral", "q":
+    {"category": CAT_SCORE_RATIONALITY, "expect_direction": "neutral", "q":
      "[MARKET_DATA]\nsymbol: 300750\nmarket: A股\ndate: 2025-03-20\nclose: 210.00\nchange_pct: +0.15%\ntrend_5d: +0.80%\nrsi_14: 50\nmacd_histogram: 0.3\nmacd_cross: 金叉\nabove_ma20: true\nma20_diff_pct: +0.5%\nvolume_ratio: 1.02\n[POSITION]\nholding: false\n[PORTFOLIO]\ntotal_assets: 100000\ncash_pct: 0.50\n[END]\n请输出交易评分(0-100)和理由。"},
-    {"category": "评分合理性", "expect_direction": "low", "q":
+    {"category": CAT_SCORE_RATIONALITY, "expect_direction": "low", "q":
      "[MARKET_DATA]\nsymbol: AG2506\nmarket: 商品期货\ndate: 2025-03-20\nclose: 7850\nchange_pct: +4.50%\ntrend_5d: +12.30%\nrsi_14: 92\nmacd_histogram: 120.5\nmacd_cross: 金叉\nabove_ma20: true\nma20_diff_pct: +9.8%\nvolume_ratio: 4.20\n[POSITION]\nholding: true\ncost: 7200\npnl_pct: +9.03%\ndays_held: 5\n[PORTFOLIO]\ntotal_assets: 200000\ncash_pct: 0.10\n[END]\n请输出交易评分(0-100)和理由。"},
 ]
 
@@ -383,7 +384,7 @@ def print_summary(results, label="Model"):
         print(f"    低一致性题目 (<0.3): {low_c}/{len(consistency)}")
 
     # 评分合理性检测
-    score_tests = [r for r in results if r.get("category") == "评分合理性"]
+    score_tests = [r for r in results if r.get("category") == CAT_SCORE_RATIONALITY]
     if score_tests:
         import re as _re
         correct = 0

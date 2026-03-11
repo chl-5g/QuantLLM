@@ -84,7 +84,7 @@ def read_symbol_data(filepath):
         for line in f:
             try:
                 rows.append(json.loads(line))
-            except:
+            except (json.JSONDecodeError, ValueError):
                 continue
     return rows
 
@@ -125,7 +125,7 @@ def gen_technical_analysis(symbol, market_label, row, prev_row=None):
     answer += f"**MACD指标**：{macd_desc}。"
     answer += f"{'DIF在DEA上方，短期偏多' if row['macd_line'] > row['signal_line'] else 'DIF在DEA下方，短期偏空'}。\n\n"
 
-    answer += f"**均线位置**：股价{'在' if above_ma else '在'}20日均线{'上方' if above_ma else '下方'}运行（偏离{ma_diff_pct:.1f}%），"
+    answer += f"**均线位置**：股价在20日均线{'上方' if above_ma else '下方'}运行（偏离{ma_diff_pct:.1f}%），"
     answer += f"{'均线系统支撑有效' if above_ma else '均线形成压力位'}。\n\n"
 
     if row["volume_ma_5"] > 0:

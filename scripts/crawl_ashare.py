@@ -270,7 +270,7 @@ def main():
             stock_info = ak.stock_info_a_code_name()
             codes = stock_info["code"].tolist()
             names = dict(zip(stock_info["code"], stock_info["name"]))
-        except:
+        except Exception:
             print("备用方案也失败了，退出")
             return
 

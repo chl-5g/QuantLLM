@@ -154,7 +154,7 @@ print(f"训练前 GPU 显存: {torch.cuda.memory_allocated()/1e9:.1f}GB / {torch
 
 # 自动从最新 checkpoint 恢复
 import glob as _glob
-checkpoints = sorted(_glob.glob(os.path.join(OUTPUT_DIR, "checkpoint-*")))
+checkpoints = sorted(_glob.glob(os.path.join(OUTPUT_DIR, "checkpoint-*")), key=lambda x: int(x.split("-")[-1]))
 resume_ckpt = checkpoints[-1] if checkpoints else None
 if resume_ckpt:
     print(f"从 {resume_ckpt} 恢复训练...")

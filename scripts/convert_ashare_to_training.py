@@ -571,7 +571,7 @@ def main():
             for line in f:
                 try:
                     rows.append(json.loads(line))
-                except:
+                except (json.JSONDecodeError, ValueError):
                     continue
 
         if len(rows) < 30:
