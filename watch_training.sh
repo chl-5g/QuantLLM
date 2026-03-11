@@ -4,7 +4,7 @@
 # 守护模式: bash ~/watch_training.sh --guard（cron 调用）
 
 OUTPUT_DIR="/opt/quant-llm/output/quant-qwen2.5-14b-lora"
-PID_FILE="/tmp/quant-llm/train.pid"
+PID_FILE="/opt/quant-llm/output/train.pid"
 
 # 找最新的 checkpoint
 latest_ckpt=$(ls -d ${OUTPUT_DIR}/checkpoint-* 2>/dev/null | sort -t- -k2 -n | tail -1)
@@ -61,12 +61,12 @@ else
         echo "  训练进程: 未运行（异常中断！）"
         if [ "${1}" = "--guard" ]; then
             echo "  >>> 自动重启训练..."
-            cd /tmp/quant-llm
+            cd /opt/quant-llm/output
             source /opt/quant-llm/finetune-env/bin/activate
             export http_proxy=http://192.168.0.10:6152 https_proxy=http://192.168.0.10:6152 no_proxy=localhost,127.0.0.1,::1,10.0.0.0/8,192.168.0.0/16
-            nohup python /opt/quant-llm/scripts/train.py >> /tmp/quant-llm/train.log 2>&1 &
+            nohup python /opt/quant-llm/scripts/train.py >> /opt/quant-llm/output/train.log 2>&1 &
             echo "$!" > "$PID_FILE"
-            echo "  >>> 已重启: PID $!, 日志: /tmp/quant-llm/train.log"
+            echo "  >>> 已重启: PID $!, 日志: /opt/quant-llm/output/train.log"
         else
             echo "  提示: 用 bash ~/watch_training.sh --guard 可自动重启"
         fi

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 将 QLoRA checkpoint 合并到基座模型并导出 GGUF (Q4_K_M)
-输出: /tmp/quant-llm/training-data/output/quant-qwen2.5-14b.gguf
+输出: /opt/quant-llm/output/quant-qwen2.5-14b.gguf
 """
 import os
 import warnings

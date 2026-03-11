@@ -3,8 +3,8 @@
 # 用法: bash watch_eval.sh          （查看进度）
 #       bash watch_eval.sh --guard   （进程中断时自动重启，适合 cron）
 
-LOG_FILE="/tmp/quant-llm/eval.log"
-PID_FILE="/tmp/quant-llm/eval.pid"
+LOG_FILE="/opt/quant-llm/output/eval.log"
+PID_FILE="/opt/quant-llm/output/eval.pid"
 RESULT_DIR="/opt/quant-llm/output"
 VENV="/opt/quant-llm/finetune-env/bin/activate"
 SCRIPT="/opt/quant-llm/scripts/evaluate.py"
@@ -50,7 +50,6 @@ latest_result() {
 
 # 启动评估
 start_eval() {
-    mkdir -p /tmp/quant-llm
     cd /opt/quant-llm || exit 1
     source "$VENV"
     nohup python "$SCRIPT" >> "$LOG_FILE" 2>&1 &

@@ -4,12 +4,12 @@
 技术指标计算 + 数据清洗，与 crawl_ashare.py 同架构
 
 输出：
-  /tmp/quant-llm/futures/basic/      期货基础行情
-  /tmp/quant-llm/futures/advanced/   期货进阶因子
-  /tmp/quant-llm/etf/basic/          ETF基础行情
-  /tmp/quant-llm/etf/advanced/       ETF进阶因子
-  /tmp/quant-llm/cbond/basic/        可转债基础行情
-  /tmp/quant-llm/cbond/advanced/     可转债进阶因子
+  /opt/quant-llm/data/futures/basic/      期货基础行情
+  /opt/quant-llm/data/futures/advanced/   期货进阶因子
+  /opt/quant-llm/data/etf/basic/          ETF基础行情
+  /opt/quant-llm/data/etf/advanced/       ETF进阶因子
+  /opt/quant-llm/data/cbond/basic/        可转债基础行情
+  /opt/quant-llm/data/cbond/advanced/     可转债进阶因子
 
 数据源：akshare（免费，无需 API key）
 """
