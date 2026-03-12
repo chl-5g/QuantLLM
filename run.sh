@@ -241,8 +241,17 @@ case "$STEP" in
         step_merge
         step_train
         ;;
+    rag-build)
+        log "========== RAG: 构建索引 =========="
+        python3 "$SCRIPTS_DIR/rag_build_index.py"
+        log "RAG 索引构建完成"
+        ;;
+    rag-serve)
+        log "========== RAG: 增强推理服务 =========="
+        python3 "$SCRIPTS_DIR/rag_serve.py"
+        ;;
     *)
-        echo "用法: bash run.sh [crawl|convert|generate|merge|train|export|eval|all]"
+        echo "用法: bash run.sh [crawl|convert|generate|merge|train|export|eval|rag-build|rag-serve|all]"
         echo ""
         echo "  crawl      数据采集（A股+期货+ETF+可转债）"
         echo "  convert    行情数据 → 训练问答对"
@@ -251,6 +260,8 @@ case "$STEP" in
         echo "  train      QLoRA 微调训练"
         echo "  export     导出 GGUF 格式"
         echo "  eval       模型评估"
+        echo "  rag-build  构建 RAG 检索索引"
+        echo "  rag-serve  启动 RAG 增强推理服务"
         echo "  all        执行全部流程（默认）"
         exit 1
         ;;

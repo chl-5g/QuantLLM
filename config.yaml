@@ -129,3 +129,15 @@ risk_control:
   slippage_pct: 0.0003               # 滑点（万分之三）
   commission_pct: 0.00025            # 佣金（万分之二点五）
   volume_limit_pct: 0.05             # 成交量限制（不超过当日总量5%）
+
+# ----------------------------------------------------------
+# RAG 检索增强配置
+# ----------------------------------------------------------
+rag:
+  enabled: true
+  embedding_model: BAAI/bge-large-zh-v1.5
+  index_file: output/rag_index.faiss
+  metadata_file: output/rag_metadata.jsonl
+  top_k: 3
+  score_threshold: 0.35
+  max_ref_tokens: 460
