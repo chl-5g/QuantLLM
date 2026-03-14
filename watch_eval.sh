@@ -52,7 +52,7 @@ latest_result() {
 start_eval() {
     cd /opt/quant-llm || exit 1
     source "$VENV"
-    nohup python "$SCRIPT" >> "$LOG_FILE" 2>&1 &
+    nohup python "$SCRIPT" --max-holdout 30 >> "$LOG_FILE" 2>&1 &
     echo "$!" > "$PID_FILE"
     echo "$!"
 }

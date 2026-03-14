@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 推理链增强脚本
-用 deepseek-r1:32b 为高质量训练数据添加 <think> 推理链
+用 qwen3:14b 思考模式为高质量训练数据添加 <think> 推理链
 输入：merged_train_v2.jsonl 中的高质量记录
 输出：training-data/reasoning_enhanced.jsonl
 """
@@ -13,7 +13,7 @@ import requests
 import time
 
 OLLAMA_URL = "http://127.0.0.1:11434/api/chat"
-MODEL = "deepseek-r1:32b"
+MODEL = "qwen3:14b"
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INPUT_FILE = os.path.join(PROJECT_ROOT, "training-data", "merged_train_v2.jsonl")
 OUTPUT_FILE = os.path.join(PROJECT_ROOT, "training-data", "reasoning_enhanced.jsonl")
@@ -52,8 +52,8 @@ REASONING_PREFER_KEYWORDS = [
 MAX_RECORDS = 2000
 
 
-def call_ollama(messages, max_retries=2, timeout=300):
-    """调用 deepseek-r1:32b"""
+def call_ollama(messages, max_retries=2, timeout=120):
+    """调用 qwen3:14b 思考模式，返回 (thinking, content) 元组"""
     for attempt in range(max_retries + 1):
         try:
             resp = requests.post(
@@ -62,19 +62,23 @@ def call_ollama(messages, max_retries=2, timeout=300):
                     "model": MODEL,
                     "messages": messages,
                     "stream": False,
-                    "options": {"temperature": 0.6, "num_predict": 4096},
+                    "options": {"temperature": 0.6, "num_predict": 2048, "num_ctx": 4096},
                 },
-                timeout=timeout,
+                timeout=(10, timeout),  # (connect_timeout, read_timeout)
             )
             resp.raise_for_status()
-            return resp.json()["message"]["content"]
+            msg = resp.json()["message"]
+            # qwen3 思考模式：thinking 在单独字段，content 是最终回答
+            thinking = msg.get("thinking", "") or ""
+            content = msg.get("content", "") or ""
+            return thinking, content
         except Exception as e:
             if attempt < max_retries:
                 print(f"  重试 ({attempt+1}/{max_retries}): {e}")
                 time.sleep(5)
             else:
                 print(f"  调用失败: {e}")
-                return None
+                return None, None
 
 
 def extract_think_block(text):
@@ -155,7 +159,7 @@ def select_records(input_file, max_count):
 
 def main():
     print("=" * 60)
-    print("推理链增强 (deepseek-r1:32b)")
+    print("推理链增强 (qwen3:14b 思考模式)")
     print("=" * 60)
 
     if not os.path.exists(INPUT_FILE):
@@ -184,6 +188,9 @@ def main():
 
         # 检查进度
         if rhash in progress:
+            if progress[rhash] == "__skip__":
+                skipped += 1
+                continue
             results.append(progress[rhash])
             reused += 1
             continue
@@ -192,21 +199,19 @@ def main():
         user_msg = next((m["content"] for m in messages if m["role"] == "user"), "")
         original_answer = next((m["content"] for m in messages if m["role"] == "assistant"), "")
 
-        # 构造 R1 prompt
+        # 构造 prompt（/think 触发 qwen3 思考模式）
         r1_messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_msg},
+            {"role": "user", "content": f"/think\n{user_msg}"},
         ]
 
         if (i - reused) % 10 == 0:
-            print(f"\n[{i+1}/{len(records)}] 处理中 (已完成{reused}条复用, {len(results)-reused}条新生成, {failed}条失败)")
+            print(f"\n[{i+1}/{len(records)}] 处理中 (复用{reused}, 新生成{len(results)-reused}, 跳过{skipped}, 失败{failed})")
 
-        response = call_ollama(r1_messages)
-        if not response:
+        think_content, r1_answer = call_ollama(r1_messages)
+        if think_content is None:
             failed += 1
             continue
-
-        think_content, r1_answer = extract_think_block(response)
 
         if not think_content or len(think_content) < 100:
             skipped += 1
@@ -227,8 +232,8 @@ def main():
         results.append(enhanced_record)
         progress[rhash] = enhanced_record
 
-        # 定期保存进度
-        if (i - reused) % 50 == 49:
+        # 每10条保存一次进度
+        if (i - reused) % 10 == 9:
             with open(PROGRESS_FILE, "w", encoding="utf-8") as f:
                 json.dump(progress, f, ensure_ascii=False)
             print(f"  进度已保存 ({len(progress)} 条)")

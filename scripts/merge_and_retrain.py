@@ -13,7 +13,7 @@ import hashlib
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(PROJECT_ROOT, "training-data")
-OUTPUT = os.path.join(DATA_DIR, "merged_train_v2.jsonl")
+OUTPUT = os.path.join(DATA_DIR, "merged_train_v3.jsonl")
 
 sources = [
     (os.path.join(DATA_DIR, "baai_zh_full.jsonl"), "baai_zh_finance"),
@@ -22,6 +22,7 @@ sources = [
     (os.path.join(DATA_DIR, "fingpt_forecaster.jsonl"), "fingpt_forecaster"),
     (os.path.join(DATA_DIR, "quant_calculations.jsonl"), "quant_calculations"),
     (os.path.join(DATA_DIR, "reasoning_enhanced.jsonl"), "reasoning_enhanced"),
+    (os.path.join(DATA_DIR, "finance_r1_reasoning.jsonl"), "finance_r1_reasoning"),
 ]
 
 

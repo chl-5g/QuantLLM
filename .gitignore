@@ -15,6 +15,16 @@ training-data/github-repos/
 # 模型输出（太大，本地保留）
 output/gguf/
 output/quant-qwen2.5-14b-lora/
+output/quant-qwen2.5-14b-lora-r32/
+
+# RAG 索引（太大，本地保留）
+output/rag_index.faiss
+output/rag_metadata.jsonl
+
+# 运行日志和截图
+output/*.log
+output/*.png
+output/*.txt
 
 # 训练数据 JSONL（可通过脚本重新生成）
 training-data/*.jsonl
@@ -31,3 +41,11 @@ training-data/cbond/
 # Python
 __pycache__/
 *.pyc
+.env
+
+# 东方财富凭据
+.eastmoney_cookies.json
+
+# 评估结果（可重新生成）
+output/eval_results*.json
+output/eval.pid

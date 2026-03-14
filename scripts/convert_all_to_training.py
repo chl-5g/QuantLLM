@@ -1066,6 +1066,45 @@ def gen_trading_score(symbol, market_label, row, rows_context, prev_row=None,
     else:
         trend_5d = change
 
+    # ---- 换手率、总股本、底部判定 ----
+    # 换手率：用成交量/总股本估算（训练数据中模拟）
+    turnover_rate = row.get("turnover_rate", 0)
+    if turnover_rate == 0 and "volume" in row:
+        # 模拟换手率：成交量 / 总股本，训练时随机生成合理值
+        turnover_rate = rng.uniform(0.005, 0.12)  # 0.5%~12%
+    total_shares = row.get("total_shares", 0)
+    if total_shares == 0:
+        # 模拟总股本（亿股）：随机生成
+        total_shares_yi = rng.choice([0.5, 1, 2, 3, 5, 8, 10, 15, 20, 30, 50, 100])
+        total_shares = int(total_shares_yi * 1e8)
+    total_shares_yi = total_shares / 1e8
+
+    # 底部判定（多条件）
+    bottom_signals = 0
+    bottom_reasons = []
+    if rsi < 35:
+        bottom_signals += 1
+        bottom_reasons.append(f"RSI={rsi}<35")
+    if ma_diff_pct < -10:
+        bottom_signals += 1
+        bottom_reasons.append(f"低于MA20达{abs(ma_diff_pct):.1f}%")
+    # 距52周低点（用近期数据估算）
+    if len(rows_context) >= 20:
+        min_close = min(r["close"] for r in rows_context[-min(len(rows_context), 120):])
+        near_low_pct = (row["close"] - min_close) / min_close if min_close > 0 else 1
+        if near_low_pct < 0.15:
+            bottom_signals += 1
+            bottom_reasons.append(f"距近期低点仅{near_low_pct*100:.1f}%")
+    # MACD底背离（价格新低但MACD未新低）
+    if len(rows_context) >= 10 and macd_hist is not None:
+        prev_closes = [r["close"] for r in rows_context[-10:-1]]
+        prev_macds = [r.get("macd_histogram", 0) for r in rows_context[-10:-1]]
+        if prev_closes and prev_macds:
+            if row["close"] <= min(prev_closes) and macd_hist > min(prev_macds):
+                bottom_signals += 1
+                bottom_reasons.append("MACD底背离")
+    at_bottom = bottom_signals >= 2
+
     # ---- 固定格式输入 ----
     question = (
         f"[MARKET_DATA]\n"
@@ -1081,6 +1120,9 @@ def gen_trading_score(symbol, market_label, row, rows_context, prev_row=None,
         f"above_ma20: {'true' if above_ma else 'false'}\n"
         f"ma20_diff_pct: {ma_diff_pct:+.1f}%\n"
         f"volume_ratio: {vol_ratio:.2f}\n"
+        f"turnover_rate: {turnover_rate:.2%}\n"
+        f"total_shares: {total_shares_yi:.1f}亿股\n"
+        f"at_bottom: {'true' if at_bottom else 'false'}\n"
         f"{regime_block}"
         f"{position_block}"
         f"[PORTFOLIO]\n"
@@ -1216,6 +1258,26 @@ def gen_trading_score(symbol, market_label, row, rows_context, prev_row=None,
         risk_factors.append("熊市环境下需严格止损，控制仓位")
     else:
         reasons.append(f"当前处于震荡市（综合得分{rs}），策略中性")
+
+    # ---- 强制选股筛选（仅震荡市和熊市生效，牛市不适用） ----
+    if regime != "牛市":
+        # 1) 换手率 < 3% → 强制压低评分
+        if turnover_rate < 0.03:
+            score -= 30
+            reasons.append(f"换手率{turnover_rate:.2%}<3%，流动性不足（强制扣分）")
+            risk_factors.append("低换手率，成交不活跃，进出困难")
+        # 2) 总股本 >= 20亿股 → 强制压低评分
+        if total_shares >= 2_000_000_000:
+            score -= 25
+            reasons.append(f"总股本{total_shares_yi:.1f}亿股>=20亿，大盘股弹性差（强制扣分）")
+            risk_factors.append("大盘股拉升困难，不适合短线操作")
+        # 3) 处于底部区域 → 加分
+        if at_bottom:
+            score += 15
+            reasons.append(f"底部信号确认（{', '.join(bottom_reasons)}），超跌反弹机会")
+        elif bottom_signals == 1:
+            score += 5
+            reasons.append(f"部分底部信号（{', '.join(bottom_reasons)}），观察是否确认")
 
     # 钳制到 [0, 100]
     score = max(0, min(100, score))

@@ -22,15 +22,15 @@ data:
 model:
   base_model: unsloth/Qwen2.5-14B-bnb-4bit
   max_seq_length: 2048
-  output_dir: output/quant-qwen2.5-14b-lora
-  version: v1                               # 手动指定，评估时写入元信息
+  output_dir: output/quant-qwen2.5-14b-lora-r32
+  version: v2                               # 手动指定，评估时写入元信息
 
 # ----------------------------------------------------------
 # LoRA 配置
 # ----------------------------------------------------------
 lora:
-  r: 16
-  alpha: 16
+  r: 32
+  alpha: 32
   dropout: 0
   use_rslora: true
   target_modules:
@@ -58,7 +58,7 @@ training:
   save_total_limit: 3
   eval_steps: 500                      # 验证频率
   eval_ratio: 0.02                     # 验证集比例
-  early_stopping_patience: 3           # 连续 N 次 eval loss 不降则停止
+  early_stopping_patience: 10          # 连续 N 次 eval loss 不降则停止
   seed: 42
 
 # ----------------------------------------------------------
@@ -111,6 +111,21 @@ score_thresholds:
   regime_ma_days: 120
   # 评分防抖：变化需超过此值才改变动作
   change_threshold: 10
+
+# ----------------------------------------------------------
+# 选股筛选条件（强制，不符合的不进入模型评分）
+# ----------------------------------------------------------
+stock_filter:
+  min_turnover_rate: 0.03             # 换手率 >= 3%
+  max_total_shares: 2_000_000_000     # 总股本 < 20亿股
+  bottom_detection: true              # 底部筛选开启
+  apply_in_regimes: ["震荡", "熊市"]  # 仅震荡市和熊市生效，牛市不适用
+  # 底部判定条件（满足任意两条即视为底部区域）
+  bottom_rules:
+    rsi_below: 35                     # RSI < 35
+    price_near_52w_low_pct: 0.15      # 股价距52周最低点 < 15%
+    ma_deviation_below: -0.10         # 股价低于MA120超过10%
+    macd_bottom_divergence: true      # MACD底背离
 
 risk_control:
   # 仓位控制

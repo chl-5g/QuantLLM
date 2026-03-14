@@ -20,7 +20,7 @@ from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, OUTPUT_DIR, DATA_DIR
 # ============================================================
 # 配置
 # ============================================================
-DATA_FILE = os.path.join(DATA_DIR, "merged_train_v2.jsonl")
+DATA_FILE = os.path.join(DATA_DIR, "merged_train_v3.jsonl")
 EVAL_RATIO = cfg["training"].get("eval_ratio", 0.02)
 SEED = cfg["training"]["seed"]
 

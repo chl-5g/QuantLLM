@@ -1,6 +1,6 @@
 """
 RAG 索引构建
-读取 merged_train_v2.jsonl → bge-large-zh-v1.5 编码 → FAISS IndexFlatIP
+读取 merged_train_v3.jsonl → bge-large-zh-v1.5 编码 → FAISS IndexFlatIP
 """
 
 import json
@@ -17,7 +17,7 @@ from sentence_transformers import SentenceTransformer
 
 def build_index():
     rag_cfg = cfg["rag"]
-    input_file = f"{DATA_DIR}/merged_train_v2.jsonl"
+    input_file = f"{DATA_DIR}/merged_train_v3.jsonl"
     index_path = path(rag_cfg["index_file"])
     meta_path = path(rag_cfg["metadata_file"])
 

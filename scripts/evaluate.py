@@ -13,11 +13,12 @@ import warnings
 warnings.filterwarnings("ignore")
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_FILE = os.path.join(PROJECT_ROOT, "training-data", "merged_train_v2.jsonl")
+DATA_FILE = os.path.join(PROJECT_ROOT, "training-data", "merged_train_v3.jsonl")
 HOLDOUT_FILE = os.path.join(PROJECT_ROOT, "training-data", "eval_holdout.jsonl")
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "output")
 RESULTS_FILE = os.path.join(OUTPUT_DIR, "eval_results.json")
-MODEL_DIR = os.path.join(OUTPUT_DIR, "quant-qwen2.5-14b-lora")
+CHECKPOINT_FILE = os.path.join(OUTPUT_DIR, "eval_checkpoint.jsonl")
+MODEL_DIR = os.path.join(OUTPUT_DIR, "quant-qwen2.5-14b-lora-r32")
 CAT_SCORE_RATIONALITY = "评分合理性"
 BASE_MODEL = "unsloth/Qwen2.5-14B-bnb-4bit"
 MAX_SEQ_LENGTH = 2048
@@ -260,13 +261,48 @@ def check_numerical_correctness(question, response):
     return checks
 
 
-def evaluate_model(model, tokenizer, test_data, label="model", consistency_rounds=0):
+def load_checkpoint(checkpoint_file, label):
+    """加载 checkpoint，返回已完成的结果列表"""
+    results = []
+    if not os.path.exists(checkpoint_file):
+        return results
+    with open(checkpoint_file, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            rec = json.loads(line)
+            if rec.get("_label") == label:
+                results.append(rec)
+    return results
+
+
+def save_checkpoint_item(checkpoint_file, result):
+    """追加一条结果到 checkpoint 文件"""
+    with open(checkpoint_file, "a", encoding="utf-8") as f:
+        f.write(json.dumps(result, ensure_ascii=False) + "\n")
+
+
+def evaluate_model(model, tokenizer, test_data, label="model", consistency_rounds=0,
+                   checkpoint_file=None):
     """评估模型
     consistency_rounds: >0 时对手写题额外生成 N 轮，检测回复一致性
+    checkpoint_file: 指定 checkpoint 文件路径，支持断点续传
     """
-    results = []
+    # 加载已有 checkpoint
+    existing = []
+    if checkpoint_file:
+        existing = load_checkpoint(checkpoint_file, label)
+    skip_count = len(existing)
+    if skip_count > 0:
+        print(f"  [{label}] 从 checkpoint 恢复，跳过前 {skip_count} 条", flush=True)
+
+    results = list(existing)
 
     for i, item in enumerate(test_data):
+        if i < skip_count:
+            continue
+
         if i % 10 == 0:
             print(f"  [{label}] {i+1}/{len(test_data)}...", flush=True)
 
@@ -285,6 +321,8 @@ def evaluate_model(model, tokenizer, test_data, label="model", consistency_round
         response = generate_response(model, tokenizer, question)
 
         result = {
+            "_label": label,
+            "_index": i,
             "question": question[:100],
             "category": category,
             "subcat": item.get("subcat", ""),
@@ -321,6 +359,10 @@ def evaluate_model(model, tokenizer, test_data, label="model", consistency_round
             result["consistency_score"] = sum(pair_scores) / len(pair_scores) if pair_scores else 1.0
 
         results.append(result)
+
+        # 逐条写 checkpoint
+        if checkpoint_file:
+            save_checkpoint_item(checkpoint_file, result)
 
     return results
 
@@ -487,7 +529,8 @@ def main():
         print(f"一致性检测: 每题额外生成 {args.consistency} 轮")
     print("\n评估微调模型...")
     finetuned_results = evaluate_model(model, tokenizer, test_data, label="finetuned",
-                                       consistency_rounds=args.consistency)
+                                       consistency_rounds=args.consistency,
+                                       checkpoint_file=CHECKPOINT_FILE)
     print_summary(finetuned_results, label="微调模型")
 
     all_results = {"finetuned": finetuned_results}
@@ -509,7 +552,8 @@ def main():
 
         print("\n评估基座模型...")
         baseline_results = evaluate_model(base_model, base_tokenizer, test_data, label="baseline",
-                                          consistency_rounds=args.consistency)
+                                          consistency_rounds=args.consistency,
+                                          checkpoint_file=CHECKPOINT_FILE)
         print_summary(baseline_results, label="基座模型")
         all_results["baseline"] = baseline_results
 
@@ -544,12 +588,24 @@ def main():
     }
     all_results["meta"] = meta
 
+    # 清理结果中的内部字段
+    for key in ["finetuned", "baseline"]:
+        if key in all_results:
+            for r in all_results[key]:
+                r.pop("_label", None)
+                r.pop("_index", None)
+
     with open(versioned_file, "w", encoding="utf-8") as f:
         json.dump(all_results, f, ensure_ascii=False, indent=2)
     # 同时写一份 latest 方便快速查看
     with open(RESULTS_FILE, "w", encoding="utf-8") as f:
         json.dump(all_results, f, ensure_ascii=False, indent=2)
     print(f"\n结果已保存: {versioned_file} (v{version})")
+
+    # 评估全部完成，清理 checkpoint
+    if os.path.exists(CHECKPOINT_FILE):
+        os.remove(CHECKPOINT_FILE)
+        print("checkpoint 已清理")
 
 
 if __name__ == "__main__":

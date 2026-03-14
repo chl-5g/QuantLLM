@@ -125,12 +125,12 @@ step_merge() {
         log "v1 指令数据已存在 (${v1_count} 条)"
     fi
 
-    # 合并 v1 + 行情数据 → v2
+    # 合并全部数据源 → v3
     log "合并最终训练集..."
     python3 "$SCRIPTS_DIR/merge_and_retrain.py"
 
-    v2_count=$(wc -l < "$DATA_DIR/merged_train_v2.jsonl")
-    log "最终训练集: merged_train_v2.jsonl (${v2_count} 条)"
+    v3_count=$(wc -l < "$DATA_DIR/merged_train_v3.jsonl")
+    log "最终训练集: merged_train_v3.jsonl (${v3_count} 条)"
 }
 
 # ============================================================
@@ -139,7 +139,7 @@ step_merge() {
 step_train() {
     log "========== Step 4: QLoRA 训练 =========="
 
-    if [ ! -f "$DATA_DIR/merged_train_v2.jsonl" ]; then
+    if [ ! -f "$DATA_DIR/merged_train_v3.jsonl" ]; then
         err "训练数据不存在，请先执行: bash run.sh merge"
     fi
 
