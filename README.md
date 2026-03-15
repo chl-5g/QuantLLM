@@ -112,7 +112,7 @@ from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, DATA_DIR, OUTPUT_DIR
 │   └── merged_train_v4.jsonl          #   最终训练集（v4，含预测数据）
 │
 ├── output/                            # 模型输出
-│   ├── quant-qwen2.5-14b-lora-r32/   #   LoRA适配器权重
+│   ├── quant-qwen2.5-14b-v3/         #   V3 LoRA适配器权重
 │   ├── gguf/                          #   GGUF 导出文件
 │   ├── rag_index.faiss                #   RAG 检索索引
 │   ├── eval_results.json              #   评估结果
@@ -180,12 +180,13 @@ from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, DATA_DIR, OUTPUT_DIR
 
 **核心改进**：用实际未来收益做标签，而非公式评分。
 
-**Type A — 个股收益预测**（~20000条）：
+**Type A — 个股收益预测**（32,705条，2x过采样至65,410条）：
 - 输入: 全部技术指标 + 市场环境
 - 标签: 实际 5/10/20 日收益方向（strong_buy/buy/hold/sell/strong_sell）
 - 采样范围: 2005-06-01 ~ 2025-06-30（覆盖A股现代史完整周期）
+- 每只股票采样8个日期，覆盖牛/熊/震荡多种行情
 
-**Type B — 板块轮动预测**（~3000条）：
+**Type B — 板块轮动预测**（186条，2x过采样至372条）：
 - 输入: 12个核心板块 ETF 指标对比
 - 标签: 实际未来 N 日各板块收益排名
 - 板块: 科技/消费/医药/金融/新能源/军工/半导体/证券/有色/地产/基建/传媒
@@ -194,14 +195,16 @@ from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, DATA_DIR, OUTPUT_DIR
 
 | 数据源 | 预计条数 | 内容 |
 |--------|---------|------|
-| BAAI 全量中文金融 | ~40,300 | 金融知识底座 |
-| 多市场行情分析 | ~8,900 | A股/期货/ETF/可转债技术分析 |
-| 预测性训练数据 | ~20,000×2 | 个股收益预测（2x过采样） |
-| 板块轮动预测 | ~3,000×2 | ETF板块轮动（2x过采样） |
+| BAAI 全量中文金融 | 40,290 | 金融知识底座 |
+| 预测性训练数据 | 65,410 | 个股收益预测（32k×2x过采样） |
+| 多市场行情分析 | 8,855 | A股/期货/ETF/可转债技术分析 |
+| 推理链增强 | 1,820 | 带 `<think>` 推理过程 |
 | FinGPT 预测数据 | 1,230 | 道琼斯30股票趋势预测 |
-| 推理链增强 | ~2,000 | 带 `<think>` 推理过程 |
-| 量化计算 | ~500 | 风险指标/期权定价/组合优化 |
-| **预计合计** | **~100,000** | |
+| R1 金融推理 | 1,000 | DeepSeek-R1 金融推理数据 |
+| 板块轮动预测 | 372 | ETF板块轮动（186×2x过采样） |
+| 量化计算 | 350 | 风险指标/期权定价/组合优化 |
+| GitHub 量化 | 38 | 量化策略代码问答 |
+| **合计** | **119,365** | 超长样本已过滤（>8192字符） |
 
 ### Step 4: 模型训练 (`run.sh train`)
 
@@ -214,11 +217,14 @@ from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, DATA_DIR, OUTPUT_DIR
 | LoRA alpha | 32 |
 | RSLoRA | True |
 | 目标模块 | q/k/v/o/gate/up/down_proj |
-| 学习率 | 2e-4 |
+| 学习率 | 1e-4（cosine decay） |
 | Batch size | 1（梯度累积8步，等效8） |
 | Epoch | 3（配合 early stopping） |
 | 精度 | bf16 |
 | 序列长度 | 2048 |
+| 梯度裁剪 | max_grad_norm=1.0 |
+| 权重衰减 | 0.01 |
+| Checkpoint | 每2000步保存，保留最近3个 |
 
 ### Step 5: 回测验证 (`run.sh backtest`)
 

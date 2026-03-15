@@ -873,7 +873,7 @@ def _detect_regime(all_rows, current_idx):
     """
     ma_window = 120
     if current_idx < ma_window:
-        return "震荡", None, 0
+        return "震荡", None, 0, {}
 
     regime_score = 0
     detail = {}

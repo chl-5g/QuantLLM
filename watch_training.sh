@@ -3,8 +3,17 @@
 # 用法: bash /opt/quant-llm/watch_training.sh
 # 守护模式: bash /opt/quant-llm/watch_training.sh --guard（自动重启）
 
-LOG_FILE="/opt/quant-llm/output/training_log.txt"
-OUTPUT_DIR="/opt/quant-llm/output/quant-qwen2.5-14b-lora"
+# 自动检测当前活跃的训练日志和输出目录
+if [ -f "/opt/quant-llm/output/train_v3.log" ] && pgrep -f "train.py" >/dev/null 2>&1; then
+    LOG_FILE="/opt/quant-llm/output/train_v3.log"
+    OUTPUT_DIR="/opt/quant-llm/output/quant-qwen2.5-14b-v3"
+elif [ -f "/opt/quant-llm/output/train_r32_clean.log" ]; then
+    LOG_FILE="/opt/quant-llm/output/train_r32_clean.log"
+    OUTPUT_DIR="/opt/quant-llm/output/quant-qwen2.5-14b-lora-r32"
+else
+    LOG_FILE="/opt/quant-llm/output/training_log.txt"
+    OUTPUT_DIR="/opt/quant-llm/output/quant-qwen2.5-14b-lora"
+fi
 PID_FILE="/opt/quant-llm/output/train.pid"
 
 # 检查训练进程

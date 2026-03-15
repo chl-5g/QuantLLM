@@ -94,58 +94,51 @@ def write_basic(filepath, symbol, df):
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 def write_advanced(filepath, symbol, df):
+    import warnings
+    warnings.filterwarnings("ignore", category=RuntimeWarning)
+
     df_adv = add_technical_indicators(df)
     df_adv = df_adv.dropna(subset=["rsi_14", "macd_line", "close_ma_20"])
+
+    indicator_cols = [
+        "date", "open", "high", "low", "close", "volume", "amount",
+        "rsi_14", "macd_line", "signal_line", "macd_histogram",
+        "volume_ma_5", "close_ma_20", "close_ma_5", "close_ma_10",
+        "close_ma_60", "close_ma_120", "ema_12", "ema_26",
+        "roc_12", "williams_r_14", "cci_20", "atr_14",
+        "bb_upper", "bb_lower", "bb_width", "bb_position",
+        "hv_20", "obv", "mfi_14", "vwap_proxy", "vol_change_rate",
+        "adx_14", "ma_alignment", "obv_trend",
+    ]
+    round_map = {
+        "open": 2, "high": 2, "low": 2, "close": 2, "rsi_14": 1,
+        "macd_line": 2, "signal_line": 2, "macd_histogram": 2,
+        "close_ma_20": 2, "close_ma_5": 2, "close_ma_10": 2,
+        "close_ma_60": 2, "close_ma_120": 2, "ema_12": 2, "ema_26": 2,
+        "roc_12": 2, "williams_r_14": 2, "cci_20": 2,
+        "atr_14": 4, "bb_upper": 2, "bb_lower": 2,
+        "bb_width": 4, "bb_position": 4, "hv_20": 2,
+        "mfi_14": 1, "vwap_proxy": 2, "vol_change_rate": 2, "adx_14": 2,
+    }
+    int_cols = {"volume", "volume_ma_5", "obv"}
+
+    lines = []
+    for rec in df_adv.to_dict("records"):
+        row_dict = {"symbol": symbol}
+        for col in indicator_cols:
+            val = rec.get(col)
+            if val is None or (isinstance(val, float) and (pd.isna(val) or val != val)):
+                continue
+            if col in int_cols:
+                row_dict[col] = int(val)
+            elif col in round_map:
+                row_dict[col] = round(float(val), round_map[col])
+            else:
+                row_dict[col] = val
+        lines.append(json.dumps(row_dict, ensure_ascii=False))
+
     with open(filepath, "w", encoding="utf-8") as f:
-        for _, row in df_adv.iterrows():
-            record = {
-                "symbol": symbol,
-                "date": row["date"],
-                "open": round(float(row["open"]), 2),
-                "high": round(float(row["high"]), 2),
-                "low": round(float(row["low"]), 2),
-                "close": round(float(row["close"]), 2),
-                "volume": int(row["volume"]),
-                "amount": float(row.get("amount", 0)),
-                # 原有指标
-                "rsi_14": round(float(row["rsi_14"]), 1),
-                "macd_line": round(float(row["macd_line"]), 2),
-                "signal_line": round(float(row["signal_line"]), 2),
-                "macd_histogram": round(float(row["macd_histogram"]), 2),
-                "volume_ma_5": int(row["volume_ma_5"]) if pd.notna(row["volume_ma_5"]) else 0,
-                "close_ma_20": round(float(row["close_ma_20"]), 2),
-                # 多周期均线
-                "close_ma_5": round(float(row["close_ma_5"]), 2) if pd.notna(row.get("close_ma_5")) else None,
-                "close_ma_10": round(float(row["close_ma_10"]), 2) if pd.notna(row.get("close_ma_10")) else None,
-                "close_ma_60": round(float(row["close_ma_60"]), 2) if pd.notna(row.get("close_ma_60")) else None,
-                "close_ma_120": round(float(row["close_ma_120"]), 2) if pd.notna(row.get("close_ma_120")) else None,
-                "ema_12": round(float(row["ema_12"]), 2) if pd.notna(row.get("ema_12")) else None,
-                "ema_26": round(float(row["ema_26"]), 2) if pd.notna(row.get("ema_26")) else None,
-                # 动量
-                "roc_12": round(float(row["roc_12"]), 2) if pd.notna(row.get("roc_12")) else None,
-                "williams_r_14": round(float(row["williams_r_14"]), 2) if pd.notna(row.get("williams_r_14")) else None,
-                "cci_20": round(float(row["cci_20"]), 2) if pd.notna(row.get("cci_20")) else None,
-                # 波动率
-                "atr_14": round(float(row["atr_14"]), 4) if pd.notna(row.get("atr_14")) else None,
-                "bb_upper": round(float(row["bb_upper"]), 2) if pd.notna(row.get("bb_upper")) else None,
-                "bb_lower": round(float(row["bb_lower"]), 2) if pd.notna(row.get("bb_lower")) else None,
-                "bb_width": round(float(row["bb_width"]), 4) if pd.notna(row.get("bb_width")) else None,
-                "bb_position": round(float(row["bb_position"]), 4) if pd.notna(row.get("bb_position")) else None,
-                "hv_20": round(float(row["hv_20"]), 2) if pd.notna(row.get("hv_20")) else None,
-                # 量能
-                "obv": int(row["obv"]) if pd.notna(row.get("obv")) else None,
-                "mfi_14": round(float(row["mfi_14"]), 1) if pd.notna(row.get("mfi_14")) else None,
-                "vwap_proxy": round(float(row["vwap_proxy"]), 2) if pd.notna(row.get("vwap_proxy")) else None,
-                "vol_change_rate": round(float(row["vol_change_rate"]), 2) if pd.notna(row.get("vol_change_rate")) else None,
-                # 趋势
-                "adx_14": round(float(row["adx_14"]), 2) if pd.notna(row.get("adx_14")) else None,
-                # 派生特征
-                "ma_alignment": row.get("ma_alignment", None),
-                "obv_trend": row.get("obv_trend", None),
-            }
-            # 移除 None 值，减小文件体积
-            record = {k: v for k, v in record.items() if v is not None}
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        f.write("\n".join(lines) + "\n" if lines else "")
 
 # ============================================================
 # 1. 商品期货
@@ -443,15 +436,61 @@ def main():
     with open(os.path.join(OUTPUT_BASE, "multi_market_stats.json"), "w") as f:
         json.dump(stats, f, ensure_ascii=False, indent=2)
 
+def _recalc_one_multi(args):
+    """处理单个 multi-market basic 文件（供多进程调用）"""
+    import warnings
+    warnings.filterwarnings("ignore", category=RuntimeWarning)
+    bfile, adv_file = args
+    fname = os.path.basename(bfile)
+    # 断点续跑：advanced 已存在且包含新指标 → 跳过
+    if os.path.exists(adv_file):
+        try:
+            with open(adv_file, "r") as _f:
+                first_line = _f.readline()
+            if '"cci_20"' in first_line and '"bb_position"' in first_line:
+                return ("skip", fname, 0)
+        except Exception:
+            pass
+    try:
+        rows = []
+        with open(bfile, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    rows.append(json.loads(line))
+        if not rows:
+            return ("fail", fname, 0)
+        df = pd.DataFrame(rows)
+        for col in ["open", "high", "low", "close"]:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+        df["volume"] = pd.to_numeric(df["volume"], errors="coerce").fillna(0).astype(int)
+        if "amount" in df.columns:
+            df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0)
+        else:
+            df["amount"] = 0.0
+        df = df.sort_values("date").reset_index(drop=True)
+        symbol = rows[0].get("symbol", fname.replace(".jsonl", ""))
+        write_advanced(adv_file, symbol, df)
+        return ("ok", fname, len(df))
+    except Exception as e:
+        return ("fail", fname, 0)
+
+
 def recalc():
-    """从各市场 basic/ 目录读取已有数据，重新计算技术指标写入 advanced/"""
+    """从各市场 basic/ 目录读取已有数据，重新计算技术指标写入 advanced/（多进程）"""
     import glob
+    import warnings
+    from multiprocessing import Pool, cpu_count
+    warnings.filterwarnings("ignore", category=RuntimeWarning)
 
     markets = ["futures", "etf", "cbond"]
     start_time = time.time()
     total_success = 0
+    total_skipped = 0
     total_failed = 0
     total_records = 0
+
+    n_workers = min(cpu_count(), 16)
 
     for market in markets:
         basic_dir = os.path.join(OUTPUT_BASE, market, "basic")
@@ -459,62 +498,42 @@ def recalc():
 
         basic_files = sorted(glob.glob(os.path.join(basic_dir, "*.jsonl")))
         if not basic_files:
-            print(f"  {market}: basic 目录为空，跳过")
+            print(f"  {market}: basic 目录为空，跳过", flush=True)
             continue
 
         os.makedirs(adv_dir, exist_ok=True)
-        print(f"\n重算 {market}: {len(basic_files)} 个文件")
+        print(f"\n重算 {market}: {len(basic_files)} 个文件, {n_workers} 进程并行", flush=True)
 
+        tasks = [(bf, os.path.join(adv_dir, os.path.basename(bf))) for bf in basic_files]
         success = 0
+        skipped = 0
         failed = 0
         records = 0
 
-        for i, bfile in enumerate(basic_files):
-            fname = os.path.basename(bfile)
-            try:
-                rows = []
-                with open(bfile, "r", encoding="utf-8") as f:
-                    for line in f:
-                        line = line.strip()
-                        if line:
-                            rows.append(json.loads(line))
-                if not rows:
-                    failed += 1
-                    continue
-
-                df = pd.DataFrame(rows)
-                for col in ["open", "high", "low", "close"]:
-                    df[col] = pd.to_numeric(df[col], errors="coerce")
-                df["volume"] = pd.to_numeric(df["volume"], errors="coerce").fillna(0).astype(int)
-                if "amount" in df.columns:
-                    df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0)
+        with Pool(n_workers) as pool:
+            for i, result in enumerate(pool.imap_unordered(_recalc_one_multi, tasks, chunksize=4)):
+                status, fname, n_rec = result
+                if status == "skip":
+                    skipped += 1
+                    success += 1
+                elif status == "ok":
+                    success += 1
+                    records += n_rec
                 else:
-                    df["amount"] = 0.0
+                    failed += 1
 
-                df = df.sort_values("date").reset_index(drop=True)
-
-                symbol = rows[0].get("symbol", fname.replace(".jsonl", ""))
-
-                adv_file = os.path.join(adv_dir, fname)
-                write_advanced(adv_file, symbol, df)
-
-                success += 1
-                records += len(df)
-            except Exception as e:
-                failed += 1
-                print(f"  ERROR {fname}: {e}")
-
-            if (i + 1) % 100 == 0 or i == len(basic_files) - 1:
-                print(f"  [{i+1}/{len(basic_files)}] 成功 {success}, 失败 {failed}, "
-                      f"累计 {records:,} 条")
+                if (i + 1) % 100 == 0 or i == len(tasks) - 1:
+                    print(f"  [{i+1}/{len(tasks)}] 成功 {success}, 跳过 {skipped}, 失败 {failed}, "
+                          f"累计 {records:,} 条", flush=True)
 
         total_success += success
+        total_skipped += skipped
         total_failed += failed
         total_records += records
 
     elapsed = time.time() - start_time
-    print(f"\n重算完成: 成功 {total_success}, 失败 {total_failed}, "
-          f"总记录 {total_records:,}, 耗时 {elapsed/60:.1f} 分钟")
+    print(f"\n重算完成: 成功 {total_success}, 跳过 {total_skipped}, 失败 {total_failed}, "
+          f"总记录 {total_records:,}, 耗时 {elapsed/60:.1f} 分钟", flush=True)
 
 
 if __name__ == "__main__":

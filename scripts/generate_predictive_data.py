@@ -576,4 +576,16 @@ def main():
 
 
 if __name__ == "__main__":
+    import sys
+    force = "--force" in sys.argv
+    # 断点续跑：输出文件已存在且非空时跳过（--force 强制重生成）
+    if not force:
+        skip_stock = os.path.exists(OUTPUT_PREDICT) and os.path.getsize(OUTPUT_PREDICT) > 0
+        skip_sector = os.path.exists(OUTPUT_SECTOR) and os.path.getsize(OUTPUT_SECTOR) > 0
+        if skip_stock and skip_sector:
+            stock_lines = sum(1 for _ in open(OUTPUT_PREDICT))
+            sector_lines = sum(1 for _ in open(OUTPUT_SECTOR))
+            print(f"输出文件已存在: predictive_signals({stock_lines}条), sector_rotation({sector_lines}条)")
+            print("跳过生成。如需重新生成，使用 --force 参数")
+            sys.exit(0)
     main()

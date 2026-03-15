@@ -20,7 +20,10 @@ from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, OUTPUT_DIR, DATA_DIR
 # ============================================================
 # 配置
 # ============================================================
-DATA_FILE = os.path.join(DATA_DIR, "merged_train_v3_clean.jsonl")
+# V4 数据集优先，回退到 v3
+DATA_FILE = os.path.join(DATA_DIR, "merged_train_v4.jsonl")
+if not os.path.exists(DATA_FILE):
+    DATA_FILE = os.path.join(DATA_DIR, "merged_train_v3_clean.jsonl")
 EVAL_RATIO = cfg["training"].get("eval_ratio", 0.02)
 SEED = cfg["training"]["seed"]
 
@@ -76,6 +79,25 @@ def format_chatml(record):
         text += f"<|im_start|>{role}\n{content}<|im_end|>\n"
     text += "<|im_start|>assistant\n"  # 训练时的生成起点
     return text
+
+# 过滤异常数据：空内容、超长样本
+MAX_CHAR_LEN = MAX_SEQ_LENGTH * 4  # 粗估 1 token ≈ 2-4 字符，留安全余量
+filtered = []
+skipped_long = 0
+skipped_empty = 0
+for r in records:
+    msgs = r.get("messages", [])
+    total_len = sum(len(m.get("content", "")) for m in msgs)
+    if total_len < 20:
+        skipped_empty += 1
+        continue
+    if total_len > MAX_CHAR_LEN:
+        skipped_long += 1
+        continue
+    filtered.append(r)
+if skipped_long or skipped_empty:
+    print(f"   数据过滤: 跳过 {skipped_long} 条超长, {skipped_empty} 条过短, 保留 {len(filtered)}/{len(records)}")
+records = filtered
 
 texts = [format_chatml(r) for r in records]
 sources = [r.get("source", "unknown") for r in records]
@@ -139,6 +161,9 @@ trainer = SFTTrainer(
         load_best_model_at_end=True,
         metric_for_best_model="eval_loss",
         greater_is_better=False,
+        # 防崩溃：梯度裁剪 + 权重衰减
+        max_grad_norm=1.0,
+        weight_decay=0.01,
     ),
     callbacks=[EarlyStoppingCallback(
         early_stopping_patience=tcfg.get("early_stopping_patience", 3),
