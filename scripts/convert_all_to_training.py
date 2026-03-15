@@ -995,12 +995,14 @@ def _detect_regime(all_rows, current_idx):
 
 
 def gen_trading_score(symbol, market_label, row, rows_context, prev_row=None,
-                      all_rows=None, current_idx=None):
+                      all_rows=None, current_idx=None, regime_cache=None):
     """
     生成交易评分训练样本（0-100分制）。
     固定输入格式：[MARKET_DATA] [MARKET_REGIME] [POSITION] [PORTFOLIO] 分段标记。
     输出 JSON：score + reasons + risk_factors。
     牛市倾向激进买入（加分），熊市倾向保守（减分）。
+
+    regime_cache: {date_str: (regime, ma120, ma120_slope, detail)} 预计算的沪深300环境
     """
     rsi = row["rsi_14"]
     macd_hist = row["macd_histogram"]
@@ -1011,8 +1013,11 @@ def gen_trading_score(symbol, market_label, row, rows_context, prev_row=None,
     vol_ratio = row["volume"] / row["volume_ma_5"] if row["volume_ma_5"] > 0 else 1.0
     ma_diff_pct = (row["close"] - row["close_ma_20"]) / row["close_ma_20"] * 100 if row["close_ma_20"] != 0 else 0
 
-    # ---- 市场环境判断（多指标融合） ----
-    if all_rows is not None and current_idx is not None:
+    # ---- 市场环境判断（优先用沪深300全局判定） ----
+    date_str = row.get("date", "")
+    if regime_cache and date_str in regime_cache:
+        regime, ma120, ma120_slope, regime_detail = regime_cache[date_str]
+    elif all_rows is not None and current_idx is not None:
         regime, ma120, ma120_slope, regime_detail = _detect_regime(all_rows, current_idx)
     else:
         regime, ma120, ma120_slope = "震荡", None, 0
@@ -1067,17 +1072,10 @@ def gen_trading_score(symbol, market_label, row, rows_context, prev_row=None,
         trend_5d = change
 
     # ---- 换手率、总股本、底部判定 ----
-    # 换手率：用成交量/总股本估算（训练数据中模拟）
-    turnover_rate = row.get("turnover_rate", 0)
-    if turnover_rate == 0 and "volume" in row:
-        # 模拟换手率：成交量 / 总股本，训练时随机生成合理值
-        turnover_rate = rng.uniform(0.005, 0.12)  # 0.5%~12%
-    total_shares = row.get("total_shares", 0)
-    if total_shares == 0:
-        # 模拟总股本（亿股）：随机生成
-        total_shares_yi = rng.choice([0.5, 1, 2, 3, 5, 8, 10, 15, 20, 30, 50, 100])
-        total_shares = int(total_shares_yi * 1e8)
-    total_shares_yi = total_shares / 1e8
+    # 只使用真实数据，不模拟（模拟值会让模型学到噪声）
+    turnover_rate = row.get("turnover_rate", 0) or 0
+    total_shares = row.get("total_shares", 0) or 0
+    total_shares_yi = total_shares / 1e8 if total_shares > 0 else 0
 
     # 底部判定（多条件）
     bottom_signals = 0
@@ -1132,9 +1130,9 @@ def gen_trading_score(symbol, market_label, row, rows_context, prev_row=None,
         f"above_ma20: {'true' if above_ma else 'false'}\n"
         f"ma20_diff_pct: {ma_diff_pct:+.1f}%\n"
         f"volume_ratio: {vol_ratio:.2f}\n"
-        f"turnover_rate: {turnover_rate:.2%}\n"
-        f"total_shares: {total_shares_yi:.1f}亿股\n"
-        f"at_bottom: {'true' if at_bottom else 'false'}\n"
+        + (f"turnover_rate: {turnover_rate:.2%}\n" if turnover_rate > 0 else "")
+        + (f"total_shares: {total_shares_yi:.1f}亿股\n" if total_shares > 0 else "")
+        + f"at_bottom: {'true' if at_bottom else 'false'}\n"
         f"roc_12: {roc_12:+.2f}%\n"
         f"cci_20: {cci_20:.1f}\n"
         f"adx_14: {adx_14:.1f}\n"
@@ -1154,222 +1152,223 @@ def gen_trading_score(symbol, market_label, row, rows_context, prev_row=None,
         f"请输出交易评分(0-100)和理由。"
     )
 
-    # ---- 评分逻辑（覆盖全分段） ----
+    # ---- 评分逻辑 v2（基于 IC 分析的反转策略） ----
+    # 核心发现：A 股所有技术因子 IC 为负 → 反转效应主导
+    # 因子值高 → 未来收益低（减分），因子值低 → 未来收益高（加分）
     score = 50  # 基准分
     reasons = []
     risk_factors = []
 
-    # RSI 贡献 (±20)
-    if rsi >= 80:
-        score -= 20
-        reasons.append(f"RSI={rsi}，严重超买")
-        risk_factors.append("超买回调风险极高")
-    elif rsi >= 70:
-        score -= 12
-        reasons.append(f"RSI={rsi}，超买区域")
-        risk_factors.append("短期有回调压力")
-    elif rsi >= 55:
-        score += 5
-        reasons.append(f"RSI={rsi}，动能偏强")
-    elif rsi >= 45:
-        pass  # 中性不加分
-    elif rsi >= 30:
-        score -= 5
-        reasons.append(f"RSI={rsi}，动能偏弱")
-    elif rsi >= 20:
-        score += 12
-        reasons.append(f"RSI={rsi}，超卖区域，存在反弹机会")
-    else:
-        score += 18
+    # 20日反转因子（新增，需要计算）
+    if len(rows_context) >= 6:
+        # 用 rows_context 近似，实际用 all_rows 更准确
+        pass
+    trend_20d = 0
+    if all_rows is not None and current_idx is not None and current_idx >= 20:
+        c20 = all_rows[current_idx - 20]["close"]
+        trend_20d = (row["close"] - c20) / c20 * 100 if c20 > 0 else 0
+
+    # ============================================================
+    # 分组评分（反转逻辑）
+    # ============================================================
+
+    # ---- 组1: 动量反转组（上限 ±20）----
+    # IC_IR: rsi=-0.40, roc_12=-0.39, trend_20d=-0.46
+    momentum_score = 0
+
+    # RSI 反转（IC_IR=-0.40，权重 ±8）
+    if rsi >= 75:
+        momentum_score -= 8
+        reasons.append(f"RSI={rsi}，严重超买，反转回调概率大")
+        risk_factors.append("RSI超买回调风险")
+    elif rsi >= 60:
+        momentum_score -= 4
+        reasons.append(f"RSI={rsi}，偏高，存在回调压力")
+    elif rsi <= 25:
+        momentum_score += 8
         reasons.append(f"RSI={rsi}，严重超卖，反弹概率较大")
+    elif rsi <= 40:
+        momentum_score += 4
+        reasons.append(f"RSI={rsi}，偏低，存在反弹空间")
 
-    # MACD 贡献 (±12)
-    if macd_hist > 0 and (prev_row and macd_hist > prev_row["macd_histogram"]):
-        score += 12
-        reasons.append("MACD柱线为正且放大，多头动能增强")
-    elif macd_hist > 0:
-        score += 6
-        reasons.append("MACD柱线为正，处于多头区间")
-    elif macd_hist < 0 and (prev_row and macd_hist < prev_row["macd_histogram"]):
-        score -= 12
-        reasons.append("MACD柱线为负且放大，空头动能增强")
-        risk_factors.append("MACD空头加速")
-    else:
-        score -= 6
-        reasons.append("MACD柱线为负，处于空头区间")
+    # 20日反转因子（IC_IR=-0.46，最强反转信号，权重 ±7）
+    if trend_20d > 15:
+        momentum_score -= 7
+        reasons.append(f"20日涨幅{trend_20d:+.1f}%，短期涨幅过大，回调风险高")
+        risk_factors.append("短期涨幅过大")
+    elif trend_20d > 5:
+        momentum_score -= 3
+        reasons.append(f"20日涨幅{trend_20d:+.1f}%，偏高")
+    elif trend_20d < -15:
+        momentum_score += 7
+        reasons.append(f"20日跌幅{trend_20d:+.1f}%，超跌反弹机会")
+    elif trend_20d < -5:
+        momentum_score += 3
+        reasons.append(f"20日跌幅{trend_20d:+.1f}%，存在反弹空间")
 
-    # MACD 金叉/死叉 (±5)
-    if macd_line > signal_line:
-        score += 5
-        reasons.append("MACD金叉，短期偏多")
-    else:
-        score -= 5
-        reasons.append("MACD死叉，短期偏空")
+    # ROC 反转（IC_IR=-0.39，权重 ±5）
+    if roc_12 > 15:
+        momentum_score -= 5
+        reasons.append(f"ROC(12)={roc_12:+.1f}%，动量过强，注意反转")
+    elif roc_12 > 5:
+        momentum_score -= 2
+    elif roc_12 < -15:
+        momentum_score += 5
+        reasons.append(f"ROC(12)={roc_12:+.1f}%，动量极弱，超跌反弹")
+    elif roc_12 < -5:
+        momentum_score += 2
 
-    # 均线位置 (±8)
-    if above_ma and ma_diff_pct > 3:
-        score += 8
-        reasons.append(f"价格在20日均线上方{ma_diff_pct:.1f}%，趋势强势")
-    elif above_ma:
-        score += 4
-        reasons.append("价格在20日均线上方，趋势偏多")
+    momentum_score = max(-20, min(20, momentum_score))
+    score += momentum_score
+
+    # ---- 组2: 趋势确认组（上限 ±12）----
+    # IC_IR: ma20_diff=-0.38, cci=-0.30, mfi=-0.31
+    trend_group_score = 0
+
+    # MA20 偏离反转（IC_IR=-0.38，权重 ±5）
+    if ma_diff_pct > 8:
+        trend_group_score -= 5
+        reasons.append(f"价格高于MA20达{ma_diff_pct:.1f}%，均值回归压力大")
+        risk_factors.append("远离均线，回归风险")
+    elif ma_diff_pct > 3:
+        trend_group_score -= 2
+    elif ma_diff_pct < -8:
+        trend_group_score += 5
+        reasons.append(f"价格低于MA20达{abs(ma_diff_pct):.1f}%，均值回归反弹")
     elif ma_diff_pct < -3:
-        score -= 8
-        reasons.append(f"价格在20日均线下方{abs(ma_diff_pct):.1f}%，趋势弱势")
-        risk_factors.append("远离均线支撑")
-    else:
-        score -= 4
-        reasons.append("价格在20日均线下方，趋势偏空")
+        trend_group_score += 2
 
-    # 量能 (±5)
-    if vol_ratio > 2.0 and change > 0:
-        score += 5
-        reasons.append(f"放量上涨({vol_ratio:.1f}倍均量)，资金积极进场")
-    elif vol_ratio > 2.0 and change < 0:
-        score -= 5
-        reasons.append(f"放量下跌({vol_ratio:.1f}倍均量)，抛压沉重")
-        risk_factors.append("放量下跌")
-    elif vol_ratio < 0.5:
-        risk_factors.append(f"严重缩量({vol_ratio:.1f}倍均量)，流动性不足")
-
-    # 5日趋势 (±5)
-    if trend_5d > 5:
-        score += 5
-        reasons.append(f"近5日涨幅{trend_5d:.1f}%，短期强势")
-    elif trend_5d < -5:
-        score -= 5
-        reasons.append(f"近5日跌幅{trend_5d:.1f}%，短期弱势")
-        risk_factors.append("连续下跌趋势")
-
-    # CCI 极值贡献 (±5)
-    if cci_20 > 200:
-        score -= 5
-        reasons.append(f"CCI={cci_20:.0f}，极度超买")
-        risk_factors.append("CCI极端高位")
+    # CCI 反转（IC_IR=-0.30，权重 ±4）
+    if cci_20 > 150:
+        trend_group_score -= 4
+        reasons.append(f"CCI={cci_20:.0f}，极度超买，反转信号")
     elif cci_20 > 100:
-        score -= 3
-        reasons.append(f"CCI={cci_20:.0f}，进入超买区")
-    elif cci_20 < -200:
-        score += 5
-        reasons.append(f"CCI={cci_20:.0f}，极度超卖，反弹概率大")
+        trend_group_score -= 2
+    elif cci_20 < -150:
+        trend_group_score += 4
+        reasons.append(f"CCI={cci_20:.0f}，极度超卖，反弹信号")
     elif cci_20 < -100:
-        score += 3
-        reasons.append(f"CCI={cci_20:.0f}，进入超卖区")
+        trend_group_score += 2
 
-    # ADX 趋势强度（放大/抑制现有信号偏移量）
-    if adx_14 > 25:
-        # 强趋势：放大当前方向信号
-        adx_amplify = 3
-        if score > 55:
-            score += adx_amplify
-            reasons.append(f"ADX={adx_14:.0f}>25，趋势确认，信号增强")
-        elif score < 45:
-            score -= adx_amplify
-            reasons.append(f"ADX={adx_14:.0f}>25，下跌趋势确认")
-    elif adx_14 < 15:
-        # 无趋势：抑制信号，拉回中性
-        reasons.append(f"ADX={adx_14:.0f}<15，趋势极弱，宜观望")
-        risk_factors.append("ADX极低，无明确趋势")
-
-    # MFI 资金流确认 (±5)
-    if mfi_14 > 80:
-        score -= 5
-        reasons.append(f"MFI={mfi_14:.0f}，资金超买")
-    elif mfi_14 < 20:
-        score += 5
+    # MFI 资金流反转（IC_IR=-0.31，权重 ±3）
+    if mfi_14 > 75:
+        trend_group_score -= 3
+        reasons.append(f"MFI={mfi_14:.0f}，资金流入过热")
+    elif mfi_14 < 25:
+        trend_group_score += 3
         reasons.append(f"MFI={mfi_14:.0f}，资金超卖，吸筹迹象")
 
-    # BB 位置 + RSI 联动 (±4)
-    if bb_position < 0.1 and rsi < 35:
-        score += 4
-        reasons.append(f"布林带底部({bb_position:.2f})+RSI超卖，双重底部信号")
-    elif bb_position > 0.9 and rsi > 65:
-        score -= 4
-        reasons.append(f"布林带顶部({bb_position:.2f})+RSI偏强，短期过热")
-        risk_factors.append("布林带+RSI双重过热")
+    # MACD 柱线（IC_IR=-0.22，弱反转，权重 ±2）
+    if macd_hist > 0.5:
+        trend_group_score -= 2
+    elif macd_hist < -0.5:
+        trend_group_score += 2
 
-    # HV 波动率风险 (±3)
-    if hv_20 > 60 and regime == "熊市":
-        score -= 3
-        reasons.append(f"HV={hv_20:.0f}%，熊市高波动，风险极高")
-        risk_factors.append("高波动+熊市，极端风险")
+    trend_group_score = max(-12, min(12, trend_group_score))
+    score += trend_group_score
 
-    # 均线排列 (±3)
-    if ma_alignment == "bullish":
-        score += 3
-        reasons.append("均线多头排列（MA5>MA10>MA20>MA60）")
-    elif ma_alignment == "bearish":
-        score -= 3
-        reasons.append("均线空头排列（MA5<MA10<MA20<MA60）")
-        risk_factors.append("均线空头排列")
+    # ---- 组3: 波动率/风险组（上限 ±10）----
+    # IC_IR: hv=-0.42, atr=-0.43, bb=-0.31
+    vol_score = 0
 
-    # OBV 量价配合 (±3)
-    if obv_trend == "rising" and score > 50:
-        score += 3
-        reasons.append("OBV上升趋势，量价配合")
-    elif obv_trend == "falling" and score < 50:
-        score -= 3
-        reasons.append("OBV下降趋势，资金持续流出")
+    # HV 波动率（IC_IR=-0.42，高波动→未来差，权重 ±5）
+    if hv_20 > 60:
+        vol_score -= 5
+        reasons.append(f"HV={hv_20:.0f}%，高波动，风险显著")
+        risk_factors.append("高波动环境")
+    elif hv_20 > 40:
+        vol_score -= 2
+    elif hv_20 < 15:
+        vol_score += 3
+        reasons.append(f"HV={hv_20:.0f}%，低波动，可能酝酿行情")
 
-    # 持仓盈亏影响 (±5)
-    if holding:
-        if pnl_pct > 10:
-            risk_factors.append(f"持仓浮盈{pnl_pct:.1f}%，注意保护利润")
-        elif pnl_pct < -5:
-            score -= 5
-            risk_factors.append(f"持仓浮亏{pnl_pct:.1f}%，关注止损")
+    # BB 位置反转（IC_IR=-0.31，权重 ±4）
+    if bb_position > 0.9:
+        vol_score -= 4
+        reasons.append(f"布林带顶部({bb_position:.2f})，反转压力")
+        risk_factors.append("布林带上轨压力")
+    elif bb_position < 0.1:
+        vol_score += 4
+        reasons.append(f"布林带底部({bb_position:.2f})，反弹空间")
 
-    # ---- 牛熊环境调整（多指标融合） ----
-    # regime_score 范围 [-5, +5]，|score| >= 2 判定为牛/熊
+    vol_score = max(-10, min(10, vol_score))
+    score += vol_score
+
+    # ---- 组4: 量能组（上限 ±8）----
+    # IC_IR: volume_ma_5=-0.67（最强因子！大成交量→未来差）
+    volume_group_score = 0
+
+    # 量比反转（高量→见顶）
+    if vol_ratio > 3.0:
+        volume_group_score -= 4
+        reasons.append(f"放量{vol_ratio:.1f}倍均量，可能见顶信号")
+        risk_factors.append("巨量交易，注意反转")
+    elif vol_ratio > 2.0:
+        volume_group_score -= 2
+    elif vol_ratio < 0.4:
+        volume_group_score += 2
+        reasons.append(f"极度缩量({vol_ratio:.1f}倍)，可能筑底")
+
+    # 5日趋势反转（IC_IR=-0.18，弱信号）
+    if trend_5d > 8:
+        volume_group_score -= 3
+    elif trend_5d < -8:
+        volume_group_score += 3
+
+    volume_group_score = max(-8, min(8, volume_group_score))
+    score += volume_group_score
+
+    # ---- 市场环境调整（±8）----
     rs = regime_detail.get("regime_score", 0)
     if regime == "牛市":
-        # 强牛(>=3.5)加10分，普通牛(>=2)加6分
-        regime_adj = 10 if rs >= 3.5 else 6
+        regime_adj = 8 if rs >= 3.5 else 5
         score += regime_adj
         factors = []
         if ma120_slope > 0.5:
             factors.append(f"MA120向上{ma120_slope:+.1f}%")
         if regime_detail.get("momentum_60d") and regime_detail["momentum_60d"] > 5:
             factors.append(f"60日动量{regime_detail['momentum_60d']:+.1f}%")
-        if regime_detail.get("vol_trend") and regime_detail["vol_trend"] > 1.1:
-            factors.append(f"量能放大{regime_detail['vol_trend']:.1f}倍")
         desc = "、".join(factors) if factors else f"综合得分{rs}"
-        reasons.append(f"{'强' if rs >= 3.5 else ''}牛市环境（{desc}），策略偏激进")
+        reasons.append(f"{'强' if rs >= 3.5 else ''}牛市环境（{desc}），反转策略放宽阈值")
     elif regime == "熊市":
-        regime_adj = -10 if rs <= -3.5 else -6
+        regime_adj = -8 if rs <= -3.5 else -5
         score += regime_adj
         factors = []
         if ma120_slope < -0.5:
             factors.append(f"MA120向下{ma120_slope:+.1f}%")
         if regime_detail.get("momentum_60d") and regime_detail["momentum_60d"] < -5:
             factors.append(f"60日跌幅{regime_detail['momentum_60d']:+.1f}%")
-        if regime_detail.get("volatility_ratio") and regime_detail["volatility_ratio"] > 1.3:
-            factors.append(f"波动率放大{regime_detail['volatility_ratio']:.1f}倍")
         desc = "、".join(factors) if factors else f"综合得分{rs}"
-        reasons.append(f"{'强' if rs <= -3.5 else ''}熊市环境（{desc}），策略偏保守")
-        risk_factors.append("熊市环境下需严格止损，控制仓位")
+        reasons.append(f"{'强' if rs <= -3.5 else ''}熊市环境（{desc}），反转需更多确认")
+        risk_factors.append("熊市环境，严格止损")
     else:
-        reasons.append(f"当前处于震荡市（综合得分{rs}），策略中性")
+        reasons.append(f"震荡市（综合得分{rs}），反转策略适用")
 
-    # ---- 强制选股筛选（仅震荡市和熊市生效，牛市不适用） ----
+    # ---- 底部确认（与反转逻辑一致）----
+    if at_bottom:
+        score += 10
+        reasons.append(f"底部信号确认（{', '.join(bottom_reasons)}），超跌反弹机会")
+    elif bottom_signals == 1:
+        score += 3
+        reasons.append(f"部分底部信号（{', '.join(bottom_reasons)}）")
+
+    # ---- 选股筛选（仅非牛市生效） ----
     if regime != "牛市":
-        # 1) 换手率 < 3% → 强制压低评分
-        if turnover_rate < 0.03:
-            score -= 30
-            reasons.append(f"换手率{turnover_rate:.2%}<3%，流动性不足（强制扣分）")
-            risk_factors.append("低换手率，成交不活跃，进出困难")
-        # 2) 总股本 >= 20亿股 → 强制压低评分
+        if turnover_rate > 0 and turnover_rate < 0.03:
+            score -= 20
+            reasons.append(f"换手率{turnover_rate:.2%}<3%，流动性不足")
+            risk_factors.append("低换手率，进出困难")
         if total_shares >= 2_000_000_000:
-            score -= 25
-            reasons.append(f"总股本{total_shares_yi:.1f}亿股>=20亿，大盘股弹性差（强制扣分）")
-            risk_factors.append("大盘股拉升困难，不适合短线操作")
-        # 3) 处于底部区域 → 加分
-        if at_bottom:
-            score += 15
-            reasons.append(f"底部信号确认（{', '.join(bottom_reasons)}），超跌反弹机会")
-        elif bottom_signals == 1:
-            score += 5
-            reasons.append(f"部分底部信号（{', '.join(bottom_reasons)}），观察是否确认")
+            score -= 15
+            reasons.append(f"总股本{total_shares_yi:.1f}亿股>=20亿，弹性差")
+
+    # 持仓盈亏影响
+    if holding:
+        if pnl_pct > 10:
+            risk_factors.append(f"持仓浮盈{pnl_pct:.1f}%，注意保护利润")
+        elif pnl_pct < -5:
+            score -= 3
+            risk_factors.append(f"持仓浮亏{pnl_pct:.1f}%，关注止损")
 
     # 钳制到 [0, 100]
     score = max(0, min(100, score))
@@ -1377,7 +1376,6 @@ def gen_trading_score(symbol, market_label, row, rows_context, prev_row=None,
     # 补充通用风险因子
     if cash_pct < 0.2:
         risk_factors.append("现金比例偏低，加仓空间有限")
-
     if not risk_factors:
         risk_factors.append("当前无显著风险信号")
 
@@ -1394,20 +1392,20 @@ def gen_trading_score(symbol, market_label, row, rows_context, prev_row=None,
     )
 
     if score >= 70:
-        answer += "多项指标共振偏多，买入信号较强。"
+        answer += "多项反转信号共振，超跌反弹概率较大，买入信号较强。"
     elif score >= 55:
-        answer += "偏多但信号不够强烈，可轻仓试探或持仓待涨。"
+        answer += "存在反弹空间但信号不强，可轻仓试探。"
     elif score >= 45:
         answer += "多空均衡，建议观望等待方向明确。"
     elif score >= 30:
-        answer += "偏空信号，建议减仓或观望。"
+        answer += "偏空信号，短期涨幅过大或趋势未见底，建议减仓。"
     else:
-        answer += "强烈看空信号，建议卖出或空仓回避。"
+        answer += "强烈超买/过热信号，建议卖出或空仓回避。"
 
     if risk_factors and risk_factors[0] != "当前无显著风险信号":
         answer += "\n\n**风险提示**：" + "；".join(risk_factors) + "。"
 
-    answer += "\n\n*评分仅基于技术指标，实际决策需结合基本面、市场环境和仓位管理。*"
+    answer += "\n\n*评分基于反转因子分析（IC验证），实际决策需结合基本面和仓位管理。*"
 
     return question, answer
 
@@ -1416,12 +1414,14 @@ def gen_trading_score(symbol, market_label, row, rows_context, prev_row=None,
 # 主流程
 # ============================================================
 
-def process_market(market_key, config):
-    """处理单个市场的数据"""
+def process_market(market_key, config, regime_cache=None):
+    """处理单个市场的数据。regime_cache: 沪深300预计算的市场环境。"""
     data_dir = config["dir"]
     label = config["label"]
     max_per = config["max_per_symbol"]
     max_total = config["max_total"]
+    if regime_cache is None:
+        regime_cache = {}
 
     files = sorted(glob.glob(os.path.join(data_dir, "*.jsonl")))
     if not files:
@@ -1472,7 +1472,7 @@ def process_market(market_key, config):
                     q, a = gen_trading_signal(symbol, label, row, prev_row)
                     ttype = "signal"
                 elif r < 0.47:
-                    q, a = gen_trading_score(symbol, label, row, rows_ctx, prev_row, all_rows=rows, current_idx=idx)
+                    q, a = gen_trading_score(symbol, label, row, rows_ctx, prev_row, all_rows=rows, current_idx=idx, regime_cache=regime_cache)
                     ttype = "score"
                 elif r < 0.62:
                     q, a = gen_futures_basis_analysis(symbol, rows[max(0, idx-10):idx+1])
@@ -1497,7 +1497,7 @@ def process_market(market_key, config):
                     q, a = gen_trading_signal(symbol, label, row, prev_row)
                     ttype = "signal"
                 elif r < 0.50:
-                    q, a = gen_trading_score(symbol, label, row, rows_ctx, prev_row, all_rows=rows, current_idx=idx)
+                    q, a = gen_trading_score(symbol, label, row, rows_ctx, prev_row, all_rows=rows, current_idx=idx, regime_cache=regime_cache)
                     ttype = "score"
                 elif r < 0.65:
                     q, a = gen_etf_tracking_analysis(symbol, rows[max(0, idx-19):idx+1])
@@ -1519,7 +1519,7 @@ def process_market(market_key, config):
                     q, a = gen_trading_signal(symbol, label, row, prev_row)
                     ttype = "signal"
                 elif r < 0.52:
-                    q, a = gen_trading_score(symbol, label, row, rows_ctx, prev_row, all_rows=rows, current_idx=idx)
+                    q, a = gen_trading_score(symbol, label, row, rows_ctx, prev_row, all_rows=rows, current_idx=idx, regime_cache=regime_cache)
                     ttype = "score"
                 elif r < 0.78:
                     q, a = gen_cbond_analysis(symbol, rows[max(0, idx-9):idx+1])
@@ -1538,7 +1538,7 @@ def process_market(market_key, config):
                     q, a = gen_trading_signal(symbol, label, row, prev_row)
                     ttype = "signal"
                 else:
-                    q, a = gen_trading_score(symbol, label, row, rows_ctx, prev_row, all_rows=rows, current_idx=idx)
+                    q, a = gen_trading_score(symbol, label, row, rows_ctx, prev_row, all_rows=rows, current_idx=idx, regime_cache=regime_cache)
                     ttype = "score"
 
             if q and a:
@@ -1565,15 +1565,41 @@ def process_market(market_key, config):
     return records
 
 
+def _build_regime_cache(etf_path):
+    """用沪深300 ETF数据预计算每个交易日的市场环境"""
+    if not os.path.exists(etf_path):
+        print(f"  警告: 未找到沪深300数据 {etf_path}，regime 将回退到个股判定")
+        return {}
+
+    rows = read_symbol_data(etf_path)
+    if len(rows) < 140:
+        print(f"  警告: 沪深300数据不足 ({len(rows)} 条)，regime 将回退到个股判定")
+        return {}
+
+    cache = {}
+    for idx in range(120, len(rows)):
+        date_str = rows[idx].get("date", "")
+        if date_str:
+            cache[date_str] = _detect_regime(rows, idx)
+    print(f"  沪深300 regime 缓存: {len(cache)} 个交易日")
+    return cache
+
+
 def main():
     print("=" * 60)
     print("多市场行情 → 训练数据转换")
     print("=" * 60)
 
+    # 预计算沪深300市场环境（全局共享）
+    etf_dir = os.path.join(PROJECT_ROOT, "training-data", "etf", "advanced")
+    etf_510300_path = os.path.join(etf_dir, "ETF.510300.jsonl")
+    print("预计算沪深300市场环境...")
+    regime_cache = _build_regime_cache(etf_510300_path)
+
     all_records = []
 
     for market_key, config in MARKET_CONFIG.items():
-        records = process_market(market_key, config)
+        records = process_market(market_key, config, regime_cache=regime_cache)
         all_records.extend(records)
 
     random.shuffle(all_records)

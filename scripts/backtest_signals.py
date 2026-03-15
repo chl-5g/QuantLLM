@@ -280,189 +280,272 @@ def find_row_index(all_rows, date_str):
 # 评分代理 (移植自 gen_trading_score 完整逻辑)
 # ============================================================
 
-def compute_score(row, all_rows, current_idx, prev_row=None, is_etf=False):
+def compute_score(row, all_rows, current_idx, prev_row=None, is_etf=False,
+                   regime_info=None):
     """
-    规则评分代理，完整移植 gen_trading_score 逻辑。
-    is_etf=True 时跳过选股筛选。
-    返回 score (0-100)
+    基于 IC 分析的反转型评分系统 v2。
+
+    核心发现（factor_ic_analysis.py 验证）：
+    - A 股所有技术因子 IC 为负 → 反转效应主导
+    - 因子值高 → 未来收益低（应减分）
+    - 因子分组：动量反转组、波动率组、量能组，每组设贡献上限
+
+    regime_info: 预计算的 (regime, ma120, ma120_slope, detail)，避免重复计算
+    返回 score (0-100), regime
     """
     rsi = row.get("rsi_14", 50) or 50
     macd_hist = row.get("macd_histogram", 0) or 0
     macd_line = row.get("macd_line", 0) or 0
-    signal_line = row.get("signal_line", 0) or 0
     close_ma_20 = row.get("close_ma_20", row["close"]) or row["close"]
-    above_ma = row["close"] > close_ma_20
     change = (row["close"] - row["open"]) / row["open"] * 100 if row["open"] != 0 else 0
     vol_ma_5 = row.get("volume_ma_5", 0) or 0
     vol_ratio = row["volume"] / vol_ma_5 if vol_ma_5 > 0 else 1.0
     ma_diff_pct = (row["close"] - close_ma_20) / close_ma_20 * 100 if close_ma_20 != 0 else 0
 
-    # 市场环境
-    regime, ma120, ma120_slope, regime_detail = detect_regime(all_rows, current_idx)
+    # 市场环境（优先用外部传入的，避免重复计算）
+    if regime_info:
+        regime, ma120, ma120_slope, regime_detail = regime_info
+    else:
+        regime, ma120, ma120_slope, regime_detail = detect_regime(all_rows, current_idx)
     rs = regime_detail.get("regime_score", 0)
 
-    # 近5日趋势
+    # 近期趋势
+    trend_5d = 0
+    trend_20d = 0
     if current_idx >= 5:
-        c5 = all_rows[current_idx - 4]["close"]
-        trend_5d = (row["close"] - c5) / c5 * 100 if c5 > 0 else change
-    else:
-        trend_5d = change
+        c5 = all_rows[current_idx - 5]["close"]
+        trend_5d = (row["close"] - c5) / c5 * 100 if c5 > 0 else 0
+    if current_idx >= 20:
+        c20 = all_rows[current_idx - 20]["close"]
+        trend_20d = (row["close"] - c20) / c20 * 100 if c20 > 0 else 0
 
-    # 换手率、总股本（实际数据中可能没有，用模拟值）
+    # 换手率、总股本
     turnover_rate = row.get("turnover_rate", 0) or 0
     total_shares = row.get("total_shares", 0) or 0
 
-    # 底部判定
+    # 新增指标
+    roc_12 = row.get("roc_12", 0) or 0
+    cci_20 = row.get("cci_20", 0) or 0
+    bb_position = row.get("bb_position", 0.5) or 0.5
+    mfi_14 = row.get("mfi_14", 50) or 50
+    hv_20 = row.get("hv_20", 0) or 0
+    atr_14 = row.get("atr_14", 0) or 0
+    ma_alignment = row.get("ma_alignment", "mixed") or "mixed"
+
+    # ============================================================
+    # 分组评分（反转逻辑：因子越高越看空）
+    # ============================================================
+    score = 50  # 基准
+
+    # ---- 组1: 动量反转组（上限 ±20）----
+    # IC_IR: rsi=-0.40, roc_12=-0.39, trend_20d=-0.46, macd_line=-0.45
+    momentum_score = 0
+
+    # RSI 反转（IC_IR=-0.40，权重 ±8）— 极化阈值
+    if rsi >= 80:
+        momentum_score -= 8  # 严重超买 → 看空
+    elif rsi >= 65:
+        momentum_score -= 3
+    elif rsi <= 20:
+        momentum_score += 8  # 严重超卖 → 看多（反转买入）
+    elif rsi <= 35:
+        momentum_score += 3
+
+    # 20日反转因子（IC_IR=-0.46，权重 ±7，最强反转信号）
+    if trend_20d > 20:
+        momentum_score -= 7  # 涨太多 → 看空
+    elif trend_20d > 8:
+        momentum_score -= 3
+    elif trend_20d < -20:
+        momentum_score += 7  # 跌太多 → 看多
+    elif trend_20d < -8:
+        momentum_score += 3
+
+    # ROC 反转（IC_IR=-0.39，权重 ±5）
+    if roc_12 > 20:
+        momentum_score -= 5
+    elif roc_12 > 8:
+        momentum_score -= 2
+    elif roc_12 < -20:
+        momentum_score += 5
+    elif roc_12 < -8:
+        momentum_score += 2
+
+    # 组上限 ±20
+    momentum_score = max(-20, min(20, momentum_score))
+    score += momentum_score
+
+    # ---- 组2: 趋势确认组（上限 ±12）----
+    # IC_IR: ma20_diff=-0.38, macd_hist=-0.22, cci=-0.30
+    trend_score = 0
+
+    # MA20 偏离（IC_IR=-0.38，权重 ±5）— 反转
+    if ma_diff_pct > 8:
+        trend_score -= 5  # 远离均线上方 → 回归压力
+    elif ma_diff_pct > 3:
+        trend_score -= 2
+    elif ma_diff_pct < -8:
+        trend_score += 5  # 远离均线下方 → 反弹
+    elif ma_diff_pct < -3:
+        trend_score += 2
+
+    # CCI 极值（IC_IR=-0.30，权重 ±4）— 反转
+    if cci_20 > 150:
+        trend_score -= 4
+    elif cci_20 > 100:
+        trend_score -= 2
+    elif cci_20 < -150:
+        trend_score += 4
+    elif cci_20 < -100:
+        trend_score += 2
+
+    # MACD 柱线（IC_IR=-0.22，权重 ±3）— 弱反转
+    if macd_hist > 0.5:
+        trend_score -= 2
+    elif macd_hist < -0.5:
+        trend_score += 2
+
+    # MFI 资金流（IC_IR=-0.31，权重 ±4）— 反转
+    if mfi_14 > 75:
+        trend_score -= 3
+    elif mfi_14 < 25:
+        trend_score += 3
+
+    # 组上限 ±12
+    trend_score = max(-12, min(12, trend_score))
+    score += trend_score
+
+    # ---- 组3: 波动率/风险组（上限 ±10）----
+    # IC_IR: hv=-0.42, atr=-0.43（高波动→未来收益差）
+    vol_score = 0
+
+    # HV 波动率（IC_IR=-0.42，权重 ±5）
+    if hv_20 > 60:
+        vol_score -= 5  # 高波动 → 风险大，减分
+    elif hv_20 > 40:
+        vol_score -= 2
+    elif hv_20 < 15:
+        vol_score += 3  # 低波动 → 可能酝酿突破
+
+    # BB 位置（IC_IR=-0.31，权重 ±4）— 反转
+    if bb_position > 0.9:
+        vol_score -= 4  # 布林上轨 → 看空
+    elif bb_position < 0.1:
+        vol_score += 4  # 布林下轨 → 看多
+
+    # 组上限 ±10
+    vol_score = max(-10, min(10, vol_score))
+    score += vol_score
+
+    # ---- 组4: 量能组（上限 ±8）----
+    # IC_IR: volume_ma_5=-0.67（最强！成交量越大未来越跌）
+    volume_score = 0
+
+    # 量比反转（IC_IR=-0.21）
+    if vol_ratio > 3.0:
+        volume_score -= 4  # 巨量 → 见顶信号
+    elif vol_ratio > 2.0:
+        volume_score -= 2
+    elif vol_ratio < 0.4:
+        volume_score += 2  # 极度缩量 → 筑底
+
+    # 5日趋势（IC_IR=-0.18，弱信号）
+    if trend_5d > 8:
+        volume_score -= 3
+    elif trend_5d < -8:
+        volume_score += 3
+
+    # 组上限 ±8
+    volume_score = max(-8, min(8, volume_score))
+    score += volume_score
+
+    # ---- 市场环境调整（±8）----
+    if regime == "牛市":
+        regime_adj = 8 if rs >= 3.5 else 5
+        score += regime_adj
+    elif regime == "熊市":
+        regime_adj = -8 if rs <= -3.5 else -5
+        score += regime_adj
+
+    # ---- 组5: 困境反转组（上限 ±15）----
+    # 参考国盛困境反转策略：价格跌到历史低位 + 量能萎缩 + 触底反弹信号
+    distress_score = 0
+
+    if not is_etf and current_idx >= 250:
+        # 价格分位数：当前价格在过去250天中的位置 (0-1)
+        lookback_250 = [all_rows[i]["close"] for i in range(current_idx - 250, current_idx)]
+        price_pctile = sum(1 for p in lookback_250 if p < row["close"]) / 250
+
+        if price_pctile <= 0.05:
+            distress_score += 8   # 过去一年最低5% → 极度困境，强反转信号
+        elif price_pctile <= 0.15:
+            distress_score += 5   # 底部15%
+        elif price_pctile <= 0.30:
+            distress_score += 2   # 偏低
+        elif price_pctile >= 0.90:
+            distress_score -= 6   # 历史高位 → 大概率回落
+        elif price_pctile >= 0.75:
+            distress_score -= 3
+
+        # 量能萎缩度：近5日均量 vs 过去120日均量
+        if vol_ma_5 > 0 and current_idx >= 120:
+            vol_120 = sum(all_rows[i]["volume"] for i in range(current_idx - 120, current_idx)) / 120
+            if vol_120 > 0:
+                vol_shrink = vol_ma_5 / vol_120
+                if vol_shrink < 0.3:
+                    distress_score += 5   # 量能极度萎缩 → 恐慌释放完毕
+                elif vol_shrink < 0.5:
+                    distress_score += 3
+                elif vol_shrink > 2.5:
+                    distress_score -= 4   # 天量 → 见顶信号
+                elif vol_shrink > 1.8:
+                    distress_score -= 2
+
+        # 从底部回升确认（近5天从低点反弹3%以上 = 反转启动信号）
+        if current_idx >= 10:
+            recent_low = min(all_rows[i]["low"] for i in range(current_idx - 10, current_idx))
+            if recent_low > 0:
+                bounce_pct = (row["close"] - recent_low) / recent_low * 100
+                if bounce_pct >= 5 and price_pctile <= 0.20:
+                    distress_score += 4   # 低位反弹5%+ → 强确认
+
+    # 组上限 ±15
+    distress_score = max(-15, min(15, distress_score))
+    score += distress_score
+
+    # ---- 底部确认加分（多重信号共振）----
     bottom_signals = 0
-    if rsi < 35:
+    if rsi < 25:
         bottom_signals += 1
-    if ma_diff_pct < -10:
+    if ma_diff_pct < -12:
         bottom_signals += 1
     if current_idx >= 20:
         lookback = min(current_idx, 120)
         min_close = min(all_rows[i]["close"] for i in range(current_idx - lookback, current_idx))
         near_low_pct = (row["close"] - min_close) / min_close if min_close > 0 else 1
-        if near_low_pct < 0.15:
+        if near_low_pct < 0.10:
             bottom_signals += 1
-    if current_idx >= 10 and macd_hist is not None:
-        prev_closes = [all_rows[i]["close"] for i in range(current_idx - 9, current_idx)]
-        prev_macds = [all_rows[i].get("macd_histogram", 0) or 0 for i in range(current_idx - 9, current_idx)]
-        if prev_closes and prev_macds:
-            if row["close"] <= min(prev_closes) and macd_hist > min(prev_macds):
-                bottom_signals += 1
-    at_bottom = bottom_signals >= 2
-
-    # 新增指标（安全取值）
-    cci_20 = row.get("cci_20", 0) or 0
-    adx_14 = row.get("adx_14", 0) or 0
-    bb_position = row.get("bb_position", 0.5) or 0.5
-    mfi_14 = row.get("mfi_14", 50) or 50
-    hv_20 = row.get("hv_20", 0) or 0
-    obv_trend = row.get("obv_trend", "flat") or "flat"
-    ma_alignment = row.get("ma_alignment", "mixed") or "mixed"
-
-    # ---- 评分逻辑 ----
-    score = 50
-
-    # RSI (±20)
-    if rsi >= 80:
-        score -= 20
-    elif rsi >= 70:
-        score -= 12
-    elif rsi >= 55:
-        score += 5
-    elif rsi >= 45:
-        pass
-    elif rsi >= 30:
-        score -= 5
-    elif rsi >= 20:
-        score += 12
-    else:
-        score += 18
-
-    # MACD 柱线 (±12)
-    prev_macd = (prev_row.get("macd_histogram", 0) or 0) if prev_row else None
-    if macd_hist > 0 and prev_macd is not None and macd_hist > prev_macd:
-        score += 12
-    elif macd_hist > 0:
-        score += 6
-    elif macd_hist < 0 and prev_macd is not None and macd_hist < prev_macd:
-        score -= 12
-    else:
-        score -= 6
-
-    # MACD 金叉/死叉 (±5)
-    if macd_line > signal_line:
-        score += 5
-    else:
-        score -= 5
-
-    # 均线位置 (±8)
-    if above_ma and ma_diff_pct > 3:
-        score += 8
-    elif above_ma:
-        score += 4
-    elif ma_diff_pct < -3:
-        score -= 8
-    else:
-        score -= 4
-
-    # 量能 (±5)
-    if vol_ratio > 2.0 and change > 0:
-        score += 5
-    elif vol_ratio > 2.0 and change < 0:
-        score -= 5
-
-    # 5日趋势 (±5)
-    if trend_5d > 5:
-        score += 5
-    elif trend_5d < -5:
-        score -= 5
-
-    # CCI 极值 (±5)
-    if cci_20 > 200:
-        score -= 5
-    elif cci_20 > 100:
-        score -= 3
-    elif cci_20 < -200:
-        score += 5
-    elif cci_20 < -100:
-        score += 3
-
-    # ADX 放大/抑制
-    if adx_14 > 25:
-        adx_amplify = 3
-        if score > 55:
-            score += adx_amplify
-        elif score < 45:
-            score -= adx_amplify
-
-    # MFI (±5)
-    if mfi_14 > 80:
-        score -= 5
-    elif mfi_14 < 20:
-        score += 5
-
-    # BB + RSI (±4)
-    if bb_position < 0.1 and rsi < 35:
-        score += 4
-    elif bb_position > 0.9 and rsi > 65:
-        score -= 4
-
-    # HV 波动率 (±3)
-    if hv_20 > 60 and regime == "熊市":
-        score -= 3
-
-    # 均线排列 (±3)
-    if ma_alignment == "bullish":
-        score += 3
-    elif ma_alignment == "bearish":
-        score -= 3
-
-    # OBV (±3)
-    if obv_trend == "rising" and score > 50:
-        score += 3
-    elif obv_trend == "falling" and score < 50:
-        score -= 3
-
-    # ---- 牛熊调整 ----
-    if regime == "牛市":
-        regime_adj = 10 if rs >= 3.5 else 6
-        score += regime_adj
-    elif regime == "熊市":
-        regime_adj = -10 if rs <= -3.5 else -6
-        score += regime_adj
+    if bottom_signals >= 2:
+        score += 10  # 多重底部确认
 
     # ---- 选股筛选（仅个股，非牛市） ----
     if not is_etf and regime != "牛市":
         if turnover_rate > 0 and turnover_rate < 0.03:
-            score -= 30
+            score -= 20
         if total_shares >= 2_000_000_000:
-            score -= 25
-        if at_bottom:
-            score += 15
-        elif bottom_signals == 1:
-            score += 5
+            score -= 15
+
+    # ---- 趋势过滤：个股价格在自身MA120下方且非超跌时扣分 ----
+    stock_ma120 = sum(all_rows[i]["close"] for i in range(current_idx - 120, current_idx)) / 120 \
+        if current_idx >= 120 else 0
+    if not is_etf and current_idx >= 120 and stock_ma120 > 0:
+        price_vs_ma120 = (row["close"] - stock_ma120) / stock_ma120 * 100
+        if price_vs_ma120 < -30:
+            pass  # 极度超跌，反转信号强，不扣分
+        elif price_vs_ma120 < -15:
+            score -= 5  # 深度下跌趋势，轻微扣分
+        elif price_vs_ma120 < 0:
+            score -= 8  # MA120下方，趋势向下，扣分
 
     return max(0, min(100, score)), regime
 
@@ -508,6 +591,9 @@ class Portfolio:
 
         # 状态
         self.halted = False  # 组合止损后暂停交易
+        self.halt_date = None  # 组合止损触发日期
+        self.cooldown_days = bt_cfg.get("cooldown_days", 60)  # 冷却期天数
+        self.min_hold_days = bt_cfg.get("min_hold_days", 5)  # 持仓保护期
 
     def equity(self, prices):
         """计算总权益 = 现金 + 持仓市值"""
@@ -550,6 +636,8 @@ class Portfolio:
 
         # 滑点（买入价抬高）
         exec_price = price * (1 + self.slippage_pct)
+        if exec_price <= 0:
+            return False
         # A 股最小买入 100 股
         shares = int(amount / exec_price / 100) * 100
         if shares < 100:
@@ -609,26 +697,47 @@ class Portfolio:
         })
         return True
 
+    def check_cooldown(self, date):
+        """检查冷却期是否结束，恢复交易"""
+        if self.halted and self.halt_date:
+            from datetime import datetime
+            halt_dt = datetime.strptime(self.halt_date, "%Y-%m-%d")
+            curr_dt = datetime.strptime(date, "%Y-%m-%d")
+            if (curr_dt - halt_dt).days >= self.cooldown_days:
+                self.halted = False
+                self.halt_date = None
+
     def check_stop_loss(self, date, prices):
         """检查止损：单票止损 + 组合止损"""
         eq = self.equity(prices)
-        # 组合止损
-        if (eq - self.initial_capital) / self.initial_capital <= self.portfolio_stop_loss_pct:
+        # 组合止损（触发后进入冷却期，不永久停止）
+        if not self.halted and \
+           (eq - self.initial_capital) / self.initial_capital <= self.portfolio_stop_loss_pct:
             self.halted = True
+            self.halt_date = date
             # 清仓
             for sym in list(self.positions.keys()):
                 price = prices.get(sym, self.positions[sym].buy_price)
                 self.sell(sym, price, date, reason="portfolio_stop")
             return
 
-        # 单票止损
+        # 单票止损（含持仓保护期）
+        min_hold = self.min_hold_days
         for sym in list(self.positions.keys()):
             pos = self.positions[sym]
             if pos.buy_date == date:
                 continue  # T+1
+            # 持仓保护期内不止损（除非跌幅超过保护期止损线）
+            from datetime import datetime
+            hold_days = (datetime.strptime(date, "%Y-%m-%d") -
+                         datetime.strptime(pos.buy_date, "%Y-%m-%d")).days
             price = prices.get(sym, pos.buy_price)
             pnl_pct = (price - pos.buy_price) / pos.buy_price
-            if pnl_pct <= self.stop_loss_pct:
+            if hold_days < min_hold:
+                # 保护期内只有跌幅超过30%才强制止损（极端情况）
+                if pnl_pct <= -0.30:
+                    self.sell(sym, price, date, reason="stop_loss")
+            elif pnl_pct <= self.stop_loss_pct:
                 self.sell(sym, price, date, reason="stop_loss")
 
     def snapshot(self, date, prices):
@@ -762,8 +871,8 @@ def compute_vs_benchmark(strategy_equity, benchmark_equity, risk_free=RISK_FREE_
 # 策略1: 个股选股 (每日)
 # ============================================================
 
-def run_stock_strategy(symbol_data, date_index, bt_cfg):
-    """每日选股策略"""
+def run_stock_strategy(symbol_data, date_index, bt_cfg, regime_source=None):
+    """每日选股策略。regime_source: 基准数据用于判定市场环境（如沪深300 ETF）"""
     print("\n[策略1] 个股选股 (每日)")
     initial = bt_cfg["initial_capital"]
     risk_cfg = cfg.get("risk_control", {})
@@ -775,8 +884,10 @@ def run_stock_strategy(symbol_data, date_index, bt_cfg):
         "slippage_pct": risk_cfg.get("slippage_pct", 0.0003),
         "max_position_pct": risk_cfg.get("max_position_pct", 0.10),
         "max_total_pct": risk_cfg.get("max_total_position_pct", 0.80),
-        "stop_loss_pct": risk_cfg.get("stop_loss_pct", -0.05),
+        "stop_loss_pct": risk_cfg.get("stop_loss_pct", -0.20),  # 反转策略需要更大容忍度
         "portfolio_stop_loss_pct": risk_cfg.get("portfolio_stop_loss_pct", -0.30),
+        "cooldown_days": 60,  # 组合止损后冷却60天再恢复
+        "min_hold_days": 5,   # 持仓保护期
         "max_daily_trades": risk_cfg.get("max_daily_trades", 5),
         "max_positions": bt_cfg.get("max_positions", 10),
     }
@@ -793,6 +904,12 @@ def run_stock_strategy(symbol_data, date_index, bt_cfg):
             idx_map[r["date"]] = i
         sym_idx_cache[sym] = idx_map
 
+    # 预构建 regime_source 的日期索引（用沪深300判定市场环境）
+    regime_idx_cache = {}
+    if regime_source:
+        for i, r in enumerate(regime_source):
+            regime_idx_cache[r["date"]] = i
+
     for di, date in enumerate(sorted_dates):
         if di % 50 == 0:
             print(f"  进度: {di}/{total_dates} ({date})")
@@ -800,6 +917,9 @@ def run_stock_strategy(symbol_data, date_index, bt_cfg):
         available = date_index[date]
         prices = {sym: r["close"] for sym, r in available.items()}
 
+        # 冷却期检查：到期后恢复交易
+        if pf.halted:
+            pf.check_cooldown(date)
         if pf.halted:
             pf.snapshot(date, prices)
             continue
@@ -810,26 +930,38 @@ def run_stock_strategy(symbol_data, date_index, bt_cfg):
             pf.snapshot(date, prices)
             continue
 
-        # 获取当前 regime（用第一个有足够数据的标的判定）
+        # 获取当前 regime（优先用沪深300基准数据判定）
         current_regime = "震荡"
-        for sym in list(available.keys())[:5]:
-            if sym in sym_idx_cache and date in sym_idx_cache[sym]:
-                idx = sym_idx_cache[sym][date]
-                rows = symbol_data[sym]
-                if idx >= 120:
-                    current_regime = detect_regime(rows, idx)[0]
-                    break
-
-        # 确定阈值
-        if current_regime == "牛市":
-            buy_th = thresholds.get("bull_buy", 60)
-            sell_th = thresholds.get("bull_sell", 40)
-        elif current_regime == "熊市":
-            buy_th = thresholds.get("bear_buy", 80)
-            sell_th = thresholds.get("bear_sell", 20)
+        regime_info = None  # 预计算的 regime 信息，传给 compute_score 避免重复计算
+        if regime_source and date in regime_idx_cache:
+            idx = regime_idx_cache[date]
+            if idx >= 120:
+                regime_info = detect_regime(regime_source, idx)
+                current_regime = regime_info[0]
         else:
-            buy_th = thresholds.get("buy", 70)
-            sell_th = thresholds.get("sell", 30)
+            # fallback: 用第一个有足够数据的标的
+            for sym in list(available.keys())[:5]:
+                if sym in sym_idx_cache and date in sym_idx_cache[sym]:
+                    idx = sym_idx_cache[sym][date]
+                    rows = symbol_data[sym]
+                    if idx >= 120:
+                        regime_info = detect_regime(rows, idx)
+                        current_regime = regime_info[0]
+                        break
+
+        # 确定阈值 + 熊市仓位控制
+        if current_regime == "牛市":
+            buy_th = thresholds.get("bull_buy", 68)
+            sell_th = thresholds.get("bull_sell", 35)
+            max_positions_now = pf.max_positions  # 满仓
+        elif current_regime == "熊市":
+            buy_th = thresholds.get("bear_buy", 88)
+            sell_th = thresholds.get("bear_sell", 30)
+            max_positions_now = max(2, pf.max_positions // 4)  # 熊市最多25%仓位
+        else:
+            buy_th = thresholds.get("buy", 78)
+            sell_th = thresholds.get("sell", 28)
+            max_positions_now = max(3, pf.max_positions * 2 // 3)  # 震荡市66%仓位
 
         # ---- 卖出检查 ----
         for sym in list(pf.positions.keys()):
@@ -840,12 +972,31 @@ def run_stock_strategy(symbol_data, date_index, bt_cfg):
             rows = symbol_data[sym]
             idx = sym_idx_cache[sym][date]
             prev = rows[idx - 1] if idx > 0 else None
-            score, _ = compute_score(available[sym], rows, idx, prev, is_etf=False)
+            score, _ = compute_score(available[sym], rows, idx, prev, is_etf=False,
+                                     regime_info=regime_info)
             if score <= sell_th:
                 pf.sell(sym, available[sym]["close"], date, reason="signal")
 
+        # ---- 熊市主动减仓：持仓超过仓位上限时卖出最低分的 ----
+        if len(pf.positions) > max_positions_now:
+            # 对所有持仓重新评分，卖出最低分的
+            pos_scores = []
+            for sym in list(pf.positions.keys()):
+                if sym in available and sym in sym_idx_cache and date in sym_idx_cache[sym]:
+                    rows = symbol_data[sym]
+                    idx = sym_idx_cache[sym][date]
+                    prev = rows[idx - 1] if idx > 0 else None
+                    s, _ = compute_score(available[sym], rows, idx, prev,
+                                         is_etf=False, regime_info=regime_info)
+                    pos_scores.append((s, sym))
+            pos_scores.sort()  # 升序，最差的在前
+            excess = len(pf.positions) - max_positions_now
+            for s, sym in pos_scores[:excess]:
+                if sym in available:
+                    pf.sell(sym, available[sym]["close"], date, reason="regime_reduce")
+
         # ---- 买入：评分所有可用标的，取 top N ----
-        if len(pf.positions) < pf.max_positions:
+        if len(pf.positions) < max_positions_now:
             candidates = []
             for sym, r in available.items():
                 if sym in pf.positions:
@@ -857,13 +1008,14 @@ def run_stock_strategy(symbol_data, date_index, bt_cfg):
                 if idx < 20:
                     continue  # 数据太少
                 prev = rows[idx - 1] if idx > 0 else None
-                score, _ = compute_score(r, rows, idx, prev, is_etf=False)
+                score, _ = compute_score(r, rows, idx, prev, is_etf=False,
+                                         regime_info=regime_info)
                 if score >= buy_th:
                     candidates.append((score, sym))
 
             # 按评分降序，取 top N
             candidates.sort(reverse=True)
-            slots = pf.max_positions - len(pf.positions)
+            slots = max_positions_now - len(pf.positions)
             for score, sym in candidates[:slots]:
                 if not pf._can_trade(date):
                     break
@@ -879,8 +1031,8 @@ def run_stock_strategy(symbol_data, date_index, bt_cfg):
 # 策略2: 行业ETF轮动 (每周)
 # ============================================================
 
-def run_etf_strategy(etf_data, etf_date_index, bt_cfg):
-    """行业ETF轮动策略"""
+def run_etf_strategy(etf_data, etf_date_index, bt_cfg, regime_source=None):
+    """行业ETF轮动策略。regime_source: 基准数据用于判定市场环境"""
     print("\n[策略2] 行业ETF轮动 (每周)")
     initial = bt_cfg["initial_capital"]
     risk_cfg = cfg.get("risk_control", {})
@@ -1151,7 +1303,8 @@ def main():
         print("\n加载个股数据...")
         symbol_data, stock_date_index = load_all_stocks(ashare_dir, date_range)
         print(f"  个股数: {len(symbol_data)}, 交易日: {len(stock_date_index)}")
-        stock_pf = run_stock_strategy(symbol_data, stock_date_index, bt_cfg)
+        stock_pf = run_stock_strategy(symbol_data, stock_date_index, bt_cfg,
+                                       regime_source=benchmark_data)
     else:
         print("\n[跳过] 个股策略")
 
@@ -1160,7 +1313,8 @@ def main():
     all_etf_codes = list(SECTOR_ETFS.values()) + [benchmark_code]
     etf_data, etf_date_index = load_all_etfs(etf_dir, all_etf_codes, date_range)
     print(f"  ETF数: {len(etf_data)}, 交易日: {len(etf_date_index)}")
-    etf_pf = run_etf_strategy(etf_data, etf_date_index, bt_cfg)
+    etf_pf = run_etf_strategy(etf_data, etf_date_index, bt_cfg,
+                              regime_source=benchmark_data)
 
     # ---- 计算指标 ----
     print("\n计算绩效指标...")
