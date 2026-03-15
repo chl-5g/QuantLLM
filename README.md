@@ -4,7 +4,7 @@
 
 **⚠️ 本项目仅供研究与教育用途，不构成投资建议。使用前请阅读末尾[免责声明](#免责声明)。**
 
-基于 Qwen2.5-14B 的量化交易领域 QLoRA 微调项目。覆盖 A股、商品期货、ETF基金、可转债四大市场。
+基于 Qwen2.5-14B 的量化交易领域 QLoRA 微调项目。覆盖 A股、商品期货、ETF基金、可转债四大市场，支持个股评分预测和板块 ETF 轮动策略。
 
 ## 快速开始
 
@@ -13,13 +13,17 @@
 bash /opt/quant-llm/run.sh
 
 # 或分步执行
-bash /opt/quant-llm/run.sh crawl     # 仅数据采集
-bash /opt/quant-llm/run.sh convert   # 仅数据转换
-bash /opt/quant-llm/run.sh generate  # 数据增强（FinGPT+量化计算+推理链）
-bash /opt/quant-llm/run.sh merge     # 仅合并训练集
-bash /opt/quant-llm/run.sh train     # 仅训练
-bash /opt/quant-llm/run.sh export    # 导出 GGUF
-bash /opt/quant-llm/run.sh eval      # 模型评估
+bash /opt/quant-llm/run.sh crawl      # 数据采集（A股+多市场）
+bash /opt/quant-llm/run.sh recalc     # 重算技术指标（从basic重算，不爬取）
+bash /opt/quant-llm/run.sh fund-flow  # 爬取资金流数据
+bash /opt/quant-llm/run.sh convert    # 行情数据 → 训练问答对
+bash /opt/quant-llm/run.sh predict    # 生成预测性训练数据（实际收益标签）
+bash /opt/quant-llm/run.sh generate   # 数据增强（FinGPT+量化计算+推理链）
+bash /opt/quant-llm/run.sh merge      # 合并所有数据源 → 最终训练集
+bash /opt/quant-llm/run.sh train      # QLoRA 微调训练
+bash /opt/quant-llm/run.sh export     # 导出 GGUF 格式
+bash /opt/quant-llm/run.sh eval       # 模型评估
+bash /opt/quant-llm/run.sh backtest   # 回测验证（对比沪深300）
 ```
 
 `run.sh` 会自动完成环境检查、依赖验证、GPU 显存释放、数据路径配置等工作，无需手动干预。
@@ -60,7 +64,7 @@ ollama pull deepseek-r1:32b  # 推理链增强（可选，耗时较长）
 from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, DATA_DIR, OUTPUT_DIR
 ```
 
-主要配置项：数据路径、模型参数、LoRA 配置、训练超参、ollama 地址、评估参数等。详见 `config.yaml` 注释。
+主要配置项：数据路径、模型参数、LoRA 配置、训练超参、ollama 地址、评估参数、板块 ETF 列表、回测参数等。详见 `config.yaml` 注释。
 
 ## 项目结构
 
@@ -76,46 +80,63 @@ from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, DATA_DIR, OUTPUT_DIR
 │
 ├── scripts/                           # 所有 Python 脚本
 │   ├── _config.py                     #   配置加载器（所有脚本共用）
-│   ├── crawl_ashare.py                #   A股全量历史行情爬取
-│   ├── crawl_multi_market.py          #   期货+ETF+可转债行情爬取
-│   ├── generate_training_data.py      #   GitHub量化仓库 → 中文问答对（需ollama，独立使用）
-│   ├── convert_ashare_to_training.py  #   A股行情 → 训练对（已被 convert_all 替代）
-│   ├── convert_all_to_training.py     #   全市场行情 → 训练对（A股+期货+ETF+转债）
-│   ├── prepare_dataset.py            #   合并多源指令数据为统一ChatML JSONL
-│   ├── fetch_fingpt_data.py          #   FinGPT A股预测数据 → ChatML
-│   ├── generate_quant_calculations.py #  量化计算种子扩展（60→500条）
-│   ├── add_reasoning_chains.py       #   推理链增强（deepseek-r1:32b）
-│   ├── merge_and_retrain.py          #   合并所有数据源 → 最终训练集
-│   ├── train.py                      #   QLoRA微调训练（early stopping+验证集）
-│   ├── evaluate.py                   #   模型评估（ROUGE-L+结构化+对抗性测试）
-│   └── export_gguf.py                #   导出 GGUF 格式
+│   ├── indicators.py                  #   技术指标共享库（28个指标）
+│   ├── crawl_ashare.py                #   A股全量历史行情爬取（--recalc 重算指标）
+│   ├── crawl_multi_market.py          #   期货+ETF+可转债行情爬取（--recalc）
+│   ├── crawl_fund_flow.py             #   板块/个股资金流数据爬取
+│   ├── convert_all_to_training.py     #   全市场行情 → 训练对（含增强评分因子）
+│   ├── generate_predictive_data.py    #   预测性训练数据（实际收益标签）
+│   ├── fetch_fingpt_data.py           #   FinGPT A股预测数据 → ChatML
+│   ├── generate_quant_calculations.py #   量化计算种子扩展（60→500条）
+│   ├── add_reasoning_chains.py        #   推理链增强（deepseek-r1:32b）
+│   ├── merge_and_retrain.py           #   合并所有数据源 → 最终训练集（v4）
+│   ├── train.py                       #   QLoRA微调训练（early stopping+验证集）
+│   ├── evaluate.py                    #   模型评估（ROUGE-L+结构化+对抗性测试）
+│   ├── backtest_signals.py            #   回测系统（个股+ETF轮动 vs 沪深300）
+│   ├── export_gguf.py                 #   导出 GGUF 格式
+│   ├── rag_build_index.py             #   构建 RAG 检索索引
+│   ├── rag_retrieve.py                #   RAG 检索引擎
+│   ├── rag_serve.py                   #   RAG 增强推理服务
+│   ├── eastmoney_login.py             #   东方财富模拟盘认证
+│   ├── eastmoney_keepalive.py         #   模拟盘 session 保活守护
+│   └── eastmoney_check.py             #   模拟盘凭据验证
 │
 ├── training-data/                     # 所有训练数据（.gitignore 忽略）
-│   ├── ashare/                        #   A股行情（~5000只，含技术指标）
+│   ├── ashare/                        #   A股行情（~5000只，含28个技术指标）
 │   ├── futures/                       #   商品期货（~80个主力合约）
 │   ├── etf/                           #   ETF基金（~800只）
 │   ├── cbond/                         #   可转债（~400只）
-│   ├── github-repos/                  #   GitHub量化策略源码
-│   ├── BAAI_IndustryInstruction_Finance-Economics/
-│   ├── finance-instruct-500k/
-│   ├── quant-trading-instruct/
-│   ├── baai_zh_full.jsonl              #   BAAI全量中文金融 (~40k条)
-│   ├── merged_train.jsonl             #   v1 指令数据 (~30k条，旧版)
-│   ├── quant-github-generated.jsonl   #   GitHub策略问答 (~55条)
-│   ├── all_market_train.jsonl         #   全市场行情训练对 (~10k条)
-│   ├── fingpt_forecaster.jsonl        #   FinGPT 预测数据（1230条）
-│   ├── quant_calculations.jsonl       #   量化计算问答（需ollama生成，可选）
-│   ├── reasoning_enhanced.jsonl       #   推理链增强（需ollama生成，可选）
-│   └── merged_train_v2.jsonl          #   最终训练集（~50k条，含可选数据源后~53k+）
+│   ├── fund_flow/                     #   资金流数据（板块/个股/大盘）
+│   ├── predictive_signals.jsonl       #   预测性训练数据（实际收益标签）
+│   ├── sector_rotation.jsonl          #   板块轮动训练数据
+│   └── merged_train_v4.jsonl          #   最终训练集（v4，含预测数据）
 │
 ├── output/                            # 模型输出
-│   ├── quant-qwen2.5-14b-lora/        #   LoRA适配器权重
+│   ├── quant-qwen2.5-14b-lora-r32/   #   LoRA适配器权重
 │   ├── gguf/                          #   GGUF 导出文件
-│   └── eval_results.json              #   评估结果
+│   ├── rag_index.faiss                #   RAG 检索索引
+│   ├── eval_results.json              #   评估结果
+│   ├── backtest_results.json          #   回测结果
+│   ├── backtest_equity.csv            #   回测权益曲线
+│   └── backtest_trades.csv            #   回测交易记录
 │
 ├── finetune-env/                      # Python 虚拟环境
 └── unsloth_compiled_cache/            # 编译缓存
 ```
+
+## 技术指标体系
+
+`scripts/indicators.py` 提供 28 个技术指标，纯 pandas/numpy 实现，不依赖 ta-lib：
+
+| 类别 | 指标 |
+|------|------|
+| 原有 | RSI(14), MACD(12,26,9), MA(20), Volume MA(5) |
+| 多周期均线 | MA(5/10/60/120), EMA(12/26) |
+| 动量 | ROC(12), Williams %R(14), CCI(20) |
+| 波动率 | ATR(14), Bollinger Bands(20,2), 历史波动率HV(20) |
+| 量能 | OBV, MFI(14), VWAP近似, 量变化率 |
+| 趋势 | ADX(14) |
+| 派生 | 均线排列(bullish/bearish/mixed), OBV趋势(rising/falling/flat) |
 
 ## 流程详解
 
@@ -123,130 +144,134 @@ from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, DATA_DIR, OUTPUT_DIR
 
 **A股历史行情** — `scripts/crawl_ashare.py`
 - 数据源: 东方财富 API（通过 akshare，免费无需 API key）
-- 范围: 主板+创业板+科创板，包含退市股（分层标注，用于风险预警训练）
-- 分层标注: normal（正常）/ ST / delisting（退市），每条记录含 status 和 name 字段
-- 输出: `training-data/ashare/basic/`（OHLCV）+ `training-data/ashare/advanced/`（含 RSI/MACD/MA）
-- 支持断点续传
-- 预计耗时: 2-3小时
+- 范围: 主板+创业板+科创板，包含退市股（分层标注）
+- 输出: `training-data/ashare/basic/`（OHLCV）+ `training-data/ashare/advanced/`（含28个技术指标）
+- 支持 `--recalc` 模式（从 basic 重算 advanced，无需联网）
 
 **期货+ETF+可转债** — `scripts/crawl_multi_market.py`
-- 商品期货: ~80个品种（螺纹钢、铁矿石、豆粕等主力连续合约）
-- ETF基金: ~800+只（沪深300ETF、行业ETF、跨境ETF等）
-- 可转债: ~400只活跃转债
-- 支持断点续传
-- 预计耗时: 30-60分钟
+- 商品期货 ~80个品种、ETF基金 ~800+只、可转债 ~400只
+- 同样支持 `--recalc` 模式
+
+**资金流数据** — `scripts/crawl_fund_flow.py`
+- 板块资金流排名（行业/概念/地域）
+- 个股资金流排名（今日/3日/5日/10日）
+- 大盘资金流向（北向资金、主力）
 
 ### Step 2: 数据转换 (`run.sh convert`)
 
-`scripts/convert_all_to_training.py` 将四大市场行情转化为品种专属的技术分析问答对:
+`scripts/convert_all_to_training.py` 将四大市场行情转化为品种专属的技术分析问答对。交易评分模板（0-100分制）融合以下因子：
 
-| 市场 | 上限 | 专属问答模板 |
-|------|------|-------------|
-| A股 | 5000条 | 技术面综合分析、趋势判断、交易信号(JSON)、交易评分(0-100) |
-| 商品期货 | 2000条 | 量价分析（增仓/减仓）、月度季节性统计、套保策略、跨品种套利 |
-| ETF基金 | 2000条 | 波动率评估、配置价值分析、绩效归因（夏普/Alpha）、折溢价套利 |
-| 可转债 | 1500条 | 价格区间分析（折价/平价/偏股/高价）、双低策略 |
+| 因子 | 贡献 | 说明 |
+|------|------|------|
+| RSI(14) | ±20 | 超买/超卖判断 |
+| MACD | ±17 | 柱线+金叉死叉 |
+| MA位置 | ±8 | 价格vs20日均线 |
+| CCI(20) | ±5 | 极值超买超卖 |
+| ADX(14) | ±3 | 趋势强度放大/抑制 |
+| MFI(14) | ±5 | 资金流确认 |
+| BB+RSI | ±4 | 布林带与RSI联动 |
+| HV(20) | ±3 | 波动率风险 |
+| 均线排列 | ±3 | 多头/空头排列 |
+| OBV趋势 | ±3 | 量价配合 |
+| 市场环境 | ±10 | 牛/熊/震荡自适应 |
+| 选股筛选 | -55~+15 | 换手率/股本/底部检测 |
 
-所有市场均支持交易信号（JSON 格式）和交易评分（0-100 分制）模板。
+### Step 2.5: 预测性训练数据 (`run.sh predict`)
 
-### Step 2.5: 数据增强 (`run.sh generate`)
+**核心改进**：用实际未来收益做标签，而非公式评分。
 
-| 数据源 | 条数 | 方法 |
-|--------|------|------|
-| FinGPT 预测数据 | 1230条 | HuggingFace 下载 + Llama2→ChatML 转换（道琼斯30） |
-| 量化计算种子扩展 | ~500条 | 60条手写种子 + qwen3:14b few-shot 扩展 |
-| 推理链增强 | ~2000条 | deepseek-r1:32b 为高质量记录添加 `<think>` 推理链 |
+**Type A — 个股收益预测**（~20000条）：
+- 输入: 全部技术指标 + 市场环境
+- 标签: 实际 5/10/20 日收益方向（strong_buy/buy/hold/sell/strong_sell）
+- 采样范围: 2005-06-01 ~ 2025-06-30（覆盖A股现代史完整周期）
+
+**Type B — 板块轮动预测**（~3000条）：
+- 输入: 12个核心板块 ETF 指标对比
+- 标签: 实际未来 N 日各板块收益排名
+- 板块: 科技/消费/医药/金融/新能源/军工/半导体/证券/有色/地产/基建/传媒
 
 ### Step 3: 合并训练集 (`run.sh merge`)
 
-| 数据源 | 条数 | 内容 |
-|--------|------|------|
-| BAAI 全量中文金融 | ~40,300 | 金融知识、投资分析（全量中文提取，不限关键词） |
-| 多市场行情分析 | ~8,900 | A股/期货/ETF/可转债技术分析（含【市场】前缀） |
-| FinGPT 预测数据 | 1,230 | 道琼斯30股票趋势预测（英文） |
-| GitHub策略问答 | 38 | 高质量代码解读（去重后） |
-| 量化计算（可选） | ~500 | 风险指标/期权定价/组合优化（需ollama生成） |
-| 推理链增强（可选） | ~2,000 | 带 `<think>` 推理过程的高质量对（需ollama生成） |
-| **基础合计** | **~50,400** | **不含可选数据源** |
-| **完整合计** | **~53,000+** | **含可选数据源** |
+| 数据源 | 预计条数 | 内容 |
+|--------|---------|------|
+| BAAI 全量中文金融 | ~40,300 | 金融知识底座 |
+| 多市场行情分析 | ~8,900 | A股/期货/ETF/可转债技术分析 |
+| 预测性训练数据 | ~20,000×2 | 个股收益预测（2x过采样） |
+| 板块轮动预测 | ~3,000×2 | ETF板块轮动（2x过采样） |
+| FinGPT 预测数据 | 1,230 | 道琼斯30股票趋势预测 |
+| 推理链增强 | ~2,000 | 带 `<think>` 推理过程 |
+| 量化计算 | ~500 | 风险指标/期权定价/组合优化 |
+| **预计合计** | **~100,000** | |
 
 ### Step 4: 模型训练 (`run.sh train`)
 
-`run.sh train` 会自动释放 ollama 占用的 GPU 显存，然后启动训练。
-
 训练参数（详见 `config.yaml`）:
+
 | 参数 | 值 |
 |------|-----|
 | 基座模型 | unsloth/Qwen2.5-14B-bnb-4bit |
 | LoRA rank | 32 |
 | LoRA alpha | 32 |
-| RSLoRA | True（高rank时更稳定） |
+| RSLoRA | True |
 | 目标模块 | q/k/v/o/gate/up/down_proj |
 | 学习率 | 2e-4 |
-| Batch size | 1（梯度累积8步，等效 batch_size=8） |
+| Batch size | 1（梯度累积8步，等效8） |
 | Epoch | 3（配合 early stopping） |
-| Early Stopping | patience=3（连续3次eval loss不降则停止） |
-| 验证集比例 | 2% |
-| 验证频率 | 每500步 |
 | 精度 | bf16 |
-| 优化器 | AdamW 8bit |
 | 序列长度 | 2048 |
-| 显存占用 | ~22-23GB |
 
-训练输出: `output/quant-qwen2.5-14b-lora/`（LoRA 适配器权重，自动保留最优 checkpoint）
+### Step 5: 回测验证 (`run.sh backtest`)
 
-### Step 5: 导出 GGUF (`run.sh export`)
+训练完成后，必须通过回测验证策略有效性。
 
-`scripts/export_gguf.py` 将 LoRA checkpoint 合并到基座模型并导出 Q4_K_M 量化 GGUF 格式，可用 ollama 加载。
+**两套策略**：
+1. **个股策略**（日频）：评分筛选 → 买入Top N → 止损/止盈 → T+1约束
+2. **板块ETF轮动**（周频）：板块评分 → 超配Top3 → 周度调仓
 
-### Step 6: 模型评估 (`run.sh eval`)
+**回测规则**：
+- 初始资金 10 万，佣金万2.5，印花税千1（卖出），滑点万3
+- T+1 约束、单票10%仓位上限、总仓位80%上限
+- 止损-5%/只，组合止损-30%
+- 基准：沪深300 ETF (510300) 买入持有
 
-`scripts/evaluate.py` 批量评估微调模型质量：
-- 65 条手写测试题（覆盖技术分析、策略代码、量化计算、风控、可转债/ETF/期货 + 15条对抗性测试）
-- 对抗性测试：检验风控意识、过拟合识别、常见投资谬误纠正
-- 从训练集随机抽 2% 作为 holdout 测试集
-- 评估指标：ROUGE-L、平均回复长度、结构化输出率、量化计算数值正确性、回复一致性
-- 支持 `--baseline` 参数与基座模型对比、`--consistency 2` 开启一致性检测
-- 结果自动版本化保存（`eval_results_v{N}.json`），可用对比脚本查看历史趋势：
-```bash
-python3 scripts/compare_evals.py    # 生成 Markdown 对比表 → output/eval_comparison.md
+**输出指标**：年化收益、夏普比率、最大回撤、胜率、盈亏比、Calmar比率、超额收益、信息比率
+
+### RAG 检索增强
+
+```
+用户查询 → bge-large-zh-v1.5 编码 → FAISS 检索 top-3 → 注入 system prompt → ollama 推理
 ```
 
-### 验证
+- FAISS IndexFlatIP，~200MB 索引
+- 含 `[MARKET_DATA]` 的查询跳过 RAG（直接走模型评分）
+- 配置见 `config.yaml` → `rag:` 段
 
-```python
-from unsloth import FastLanguageModel
+## 模拟盘交易系统
 
-model, tokenizer = FastLanguageModel.from_pretrained(
-    model_name="/opt/quant-llm/output/quant-qwen2.5-14b-lora",
-    max_seq_length=2048,
-    load_in_4bit=True,
-)
-FastLanguageModel.for_inference(model)
+训练+回测验证后，接入东方财富模拟盘进行实盘模拟。
 
-inputs = tokenizer(
-    "<|im_start|>system\n你是一个专业的量化交易专家。<|im_end|>\n"
-    "<|im_start|>user\n请解释RSI指标的用法<|im_end|>\n"
-    "<|im_start|>assistant\n",
-    return_tensors="pt"
-).to("cuda")
-outputs = model.generate(**inputs, max_new_tokens=512)
-print(tokenizer.decode(outputs[0], skip_special_tokens=True))
+**双模型协作架构**：
+
+```
+市场数据 → 技术指标计算 → 微调模型批量评分 → 筛选Top10 → Claude审核 → 风控 → 执行
+                                                              ↑
+                                              Claude Sonnet 宏观研判
 ```
 
-## 数据格式
+**牛熊市环境感知**（5维度融合评分）：
 
-所有训练数据统一为 **ChatML JSONL** 格式:
+| 维度 | 指标 | 牛市信号 | 熊市信号 |
+|------|------|---------|---------|
+| 趋势位置 | 价格 vs MA120 | 偏离 >5% | 偏离 <-5% |
+| 趋势方向 | MA120 斜率（20日） | >+1% | <-1% |
+| 量能确认 | 近20日均量 vs 前60日 | 放量 >1.3x | — |
+| 波动率 | 近期 vs 长期标准差 | 低波动 <0.7x | 高波动 >1.8x |
+| 价格动量 | 60日收益率 | >+15% | <-15% |
 
-```json
-{
-  "messages": [
-    {"role": "system", "content": "你是一个专业的量化交易专家，擅长策略开发、因子分析、回测评估和风险管理。"},
-    {"role": "user", "content": "用户问题"},
-    {"role": "assistant", "content": "模型回答"}
-  ]
-}
-```
+**选股筛选**（震荡/熊市强制生效）：
+- 换手率 >= 3%（否则强制扣30分）
+- 总股本 < 20亿股（否则强制扣25分）
+- 底部信号检测（RSI<35 / MA偏离<-10% / 距52周低点<15% / MACD底背离）
 
 ## 技术栈
 
@@ -254,90 +279,11 @@ print(tokenizer.decode(outputs[0], skip_special_tokens=True))
 - **微调框架**: [Unsloth](https://github.com/unslothai/unsloth) + [TRL](https://github.com/huggingface/trl) SFTTrainer
 - **微调方法**: QLoRA (Quantized Low-Rank Adaptation)
 - **数据源**: [akshare](https://github.com/akfamily/akshare) (东方财富 API)、HuggingFace 数据集
-- **训练数据生成**: 模板化规则引擎 + 本地大模型辅助 ([ollama](https://ollama.com/) + qwen3:14b)
-- **推理链增强**: deepseek-r1:32b 生成 `<think>` 推理过程
-
-## Roadmap
-
-### Phase 2: 模拟盘交易系统（计划中）
-
-训练完成后，将模型接入模拟盘进行实盘验证。
-
-**架构设计**：
-
-```
-市场数据 API ──→ 数据处理 ──→ LLM 分析决策 ──→ 交易执行 ──→ 日志记录
-                                    ↑                    ↓
-                               历史上下文 ←────── 持仓/P&L 状态
-```
-
-**核心模块**：
-
-| 模块 | 功能 |
-|------|------|
-| 数据采集 | 定时拉取日线行情 + 计算技术指标，构造结构化 prompt |
-| 决策引擎 | 调用微调模型，输出结构化 JSON 交易指令 |
-| 交易执行 | 对接模拟盘 API，执行买入/卖出/持仓 |
-| 风控层 | 独立于模型的硬编码规则（仓位上限、止损线、日亏损限制） |
-| 日志系统 | 完整记录每笔交易的输入/推理/决策/结果 |
-
-**模型输出格式**（0-100 交易评分制）：
-
-固定输入格式（`[MARKET_DATA]` `[MARKET_REGIME]` `[POSITION]` `[PORTFOLIO]` 分段标记），输出结构化 JSON：
-
-```json
-{
-  "score": 75,
-  "reasons": ["RSI=58，动能偏强", "MACD金叉，短期偏多", "牛市环境（MA120向上+2.1%、60日动量+12.3%），策略偏激进"],
-  "risk_factors": ["近5日涨幅较大，注意获利回吐"]
-}
-```
-
-**牛熊市环境感知**（多指标融合）：
-
-模型输入包含 `[MARKET_REGIME]` 段，由 5 维度综合评分（各 ±1 分，总分 [-5, +5]）自动判定：
-
-| 维度 | 指标 | 牛市信号 | 熊市信号 |
-|------|------|---------|---------|
-| 趋势位置 | 价格 vs MA120 | 偏离 >5% | 偏离 <-5% |
-| 趋势方向 | MA120 斜率（20日） | >+1% | <-1% |
-| 量能确认 | 近20日均量 vs 前60日 | 放量 >1.3× | — |
-| 波动率 | 近期 vs 长期标准差 | 低波动 <0.7× | 高波动 >1.8× |
-| 价格动量 | 60日收益率 | >+15% | <-15% |
-
-- 综合得分 ≥ 2.0 → 牛市（强牛 ≥ 3.5 加分更大）
-- 综合得分 ≤ -2.0 → 熊市
-- 其他 → 震荡
-
-**评分阈值**（可调，见 `config.yaml`）：
-- score ≥ 70 → 买入信号
-- 30 < score < 70 → 持仓/观望
-- score ≤ 30 → 卖出信号
-- 牛市自适应：买入阈值降至 60，卖出升至 40（更积极）
-- 熊市自适应：买入阈值升至 80，卖出降至 20（更保守）
-- 评分防抖：变化需超过 ±10 分才改变动作方向
-
-**资金管理策略**：
-- 初始本金 A，目标净值 B = 2A（翻倍止盈）
-- 达到 B 后提取利润 B-A，本金复位为 A，重新开始
-- 止损线：亏到 70%A 清仓暂停，保护本金
-- 每轮交易记录完整 P&L，用于后续 DPO 训练
-
-**进阶设计**（参考开源项目）：
-
-| 模式 | 参考项目 | 说明 |
-|------|----------|------|
-| Gym 环境模拟 | FinRL | 标准化 state/action/reward，模拟交易成本和滑点 |
-| 分层记忆 | FinMem | 短/中/长期记忆 + 衰减评分，检索历史相似行情 |
-| 牛熊辩论 | TradingAgents | 交易前让模型分别论证多空理由，提高决策稳健性 |
-| 波动率熔断 | FinRL | 市场异常波动时自动清仓（turbulence threshold） |
-| 订单撮合 | StockAgent | 模拟真实市场微结构，非无限流动性假设 |
-
-**设计原则**：
-- **日频决策**：匹配训练数据粒度（日线级技术分析），不做高频
-- **风控独立**：模型只做建议，风控层有一票否决权
-- **日志闭环**：交易日志可作为 DPO 训练数据（模型做对的强化，做错的作为负样本）
-- **渐进验证**：先小仓位模拟 → 评估胜率/回撤 → 再考虑扩大
+- **技术指标**: 28 个自研指标（纯 pandas/numpy，无 ta-lib 依赖）
+- **训练数据**: 模板化规则引擎 + 预测性标签（实际收益） + 本地大模型辅助
+- **回测系统**: 走步验证，T+1约束，对比沪深300基准
+- **RAG**: FAISS + bge-large-zh-v1.5
+- **模拟盘**: 东方财富 Playwright 自动化 + Claude API 审核
 
 ## 免责声明
 

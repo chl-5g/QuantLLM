@@ -25,6 +25,7 @@ import json
 import time
 import sys
 from datetime import datetime
+from indicators import add_all_technical_indicators
 
 # ============================================================
 # 配置
@@ -40,36 +41,9 @@ PROGRESS_FILE = os.path.join(OUTPUT_BASE, "multi_market_progress.json")
 # 技术指标（复用 crawl_ashare.py 的逻辑）
 # ============================================================
 
-def calc_rsi(series, period=14):
-    delta = series.diff()
-    gain = delta.where(delta > 0, 0.0)
-    loss = -delta.where(delta < 0, 0.0)
-    avg_gain = gain.ewm(alpha=1/period, min_periods=period).mean()
-    avg_loss = loss.ewm(alpha=1/period, min_periods=period).mean()
-    rs = avg_gain / avg_loss.replace(0, np.nan)
-    return 100 - (100 / (1 + rs))
-
-def calc_macd(series, fast=12, slow=26, signal=9):
-    ema_fast = series.ewm(span=fast, adjust=False).mean()
-    ema_slow = series.ewm(span=slow, adjust=False).mean()
-    macd_line = ema_fast - ema_slow
-    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
-    histogram = macd_line - signal_line
-    return macd_line, signal_line, histogram
-
-def calc_ma(series, period):
-    return series.rolling(window=period, min_periods=period).mean()
-
 def add_technical_indicators(df):
-    df = df.copy()
-    df["rsi_14"] = calc_rsi(df["close"], 14)
-    macd_line, signal_line, histogram = calc_macd(df["close"])
-    df["macd_line"] = macd_line
-    df["signal_line"] = signal_line
-    df["macd_histogram"] = histogram
-    df["volume_ma_5"] = calc_ma(df["volume"], 5)
-    df["close_ma_20"] = calc_ma(df["close"], 20)
-    return df
+    """给 DataFrame 添加技术指标列（委托给共享指标库）"""
+    return add_all_technical_indicators(df)
 
 def clean_data(df):
     if df is None or df.empty:
@@ -132,13 +106,45 @@ def write_advanced(filepath, symbol, df):
                 "low": round(float(row["low"]), 2),
                 "close": round(float(row["close"]), 2),
                 "volume": int(row["volume"]),
+                "amount": float(row.get("amount", 0)),
+                # 原有指标
                 "rsi_14": round(float(row["rsi_14"]), 1),
                 "macd_line": round(float(row["macd_line"]), 2),
                 "signal_line": round(float(row["signal_line"]), 2),
                 "macd_histogram": round(float(row["macd_histogram"]), 2),
                 "volume_ma_5": int(row["volume_ma_5"]) if pd.notna(row["volume_ma_5"]) else 0,
                 "close_ma_20": round(float(row["close_ma_20"]), 2),
+                # 多周期均线
+                "close_ma_5": round(float(row["close_ma_5"]), 2) if pd.notna(row.get("close_ma_5")) else None,
+                "close_ma_10": round(float(row["close_ma_10"]), 2) if pd.notna(row.get("close_ma_10")) else None,
+                "close_ma_60": round(float(row["close_ma_60"]), 2) if pd.notna(row.get("close_ma_60")) else None,
+                "close_ma_120": round(float(row["close_ma_120"]), 2) if pd.notna(row.get("close_ma_120")) else None,
+                "ema_12": round(float(row["ema_12"]), 2) if pd.notna(row.get("ema_12")) else None,
+                "ema_26": round(float(row["ema_26"]), 2) if pd.notna(row.get("ema_26")) else None,
+                # 动量
+                "roc_12": round(float(row["roc_12"]), 2) if pd.notna(row.get("roc_12")) else None,
+                "williams_r_14": round(float(row["williams_r_14"]), 2) if pd.notna(row.get("williams_r_14")) else None,
+                "cci_20": round(float(row["cci_20"]), 2) if pd.notna(row.get("cci_20")) else None,
+                # 波动率
+                "atr_14": round(float(row["atr_14"]), 4) if pd.notna(row.get("atr_14")) else None,
+                "bb_upper": round(float(row["bb_upper"]), 2) if pd.notna(row.get("bb_upper")) else None,
+                "bb_lower": round(float(row["bb_lower"]), 2) if pd.notna(row.get("bb_lower")) else None,
+                "bb_width": round(float(row["bb_width"]), 4) if pd.notna(row.get("bb_width")) else None,
+                "bb_position": round(float(row["bb_position"]), 4) if pd.notna(row.get("bb_position")) else None,
+                "hv_20": round(float(row["hv_20"]), 2) if pd.notna(row.get("hv_20")) else None,
+                # 量能
+                "obv": int(row["obv"]) if pd.notna(row.get("obv")) else None,
+                "mfi_14": round(float(row["mfi_14"]), 1) if pd.notna(row.get("mfi_14")) else None,
+                "vwap_proxy": round(float(row["vwap_proxy"]), 2) if pd.notna(row.get("vwap_proxy")) else None,
+                "vol_change_rate": round(float(row["vol_change_rate"]), 2) if pd.notna(row.get("vol_change_rate")) else None,
+                # 趋势
+                "adx_14": round(float(row["adx_14"]), 2) if pd.notna(row.get("adx_14")) else None,
+                # 派生特征
+                "ma_alignment": row.get("ma_alignment", None),
+                "obv_trend": row.get("obv_trend", None),
             }
+            # 移除 None 值，减小文件体积
+            record = {k: v for k, v in record.items() if v is not None}
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 # ============================================================
@@ -437,5 +443,82 @@ def main():
     with open(os.path.join(OUTPUT_BASE, "multi_market_stats.json"), "w") as f:
         json.dump(stats, f, ensure_ascii=False, indent=2)
 
+def recalc():
+    """从各市场 basic/ 目录读取已有数据，重新计算技术指标写入 advanced/"""
+    import glob
+
+    markets = ["futures", "etf", "cbond"]
+    start_time = time.time()
+    total_success = 0
+    total_failed = 0
+    total_records = 0
+
+    for market in markets:
+        basic_dir = os.path.join(OUTPUT_BASE, market, "basic")
+        adv_dir = os.path.join(OUTPUT_BASE, market, "advanced")
+
+        basic_files = sorted(glob.glob(os.path.join(basic_dir, "*.jsonl")))
+        if not basic_files:
+            print(f"  {market}: basic 目录为空，跳过")
+            continue
+
+        os.makedirs(adv_dir, exist_ok=True)
+        print(f"\n重算 {market}: {len(basic_files)} 个文件")
+
+        success = 0
+        failed = 0
+        records = 0
+
+        for i, bfile in enumerate(basic_files):
+            fname = os.path.basename(bfile)
+            try:
+                rows = []
+                with open(bfile, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            rows.append(json.loads(line))
+                if not rows:
+                    failed += 1
+                    continue
+
+                df = pd.DataFrame(rows)
+                for col in ["open", "high", "low", "close"]:
+                    df[col] = pd.to_numeric(df[col], errors="coerce")
+                df["volume"] = pd.to_numeric(df["volume"], errors="coerce").fillna(0).astype(int)
+                if "amount" in df.columns:
+                    df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0)
+                else:
+                    df["amount"] = 0.0
+
+                df = df.sort_values("date").reset_index(drop=True)
+
+                symbol = rows[0].get("symbol", fname.replace(".jsonl", ""))
+
+                adv_file = os.path.join(adv_dir, fname)
+                write_advanced(adv_file, symbol, df)
+
+                success += 1
+                records += len(df)
+            except Exception as e:
+                failed += 1
+                print(f"  ERROR {fname}: {e}")
+
+            if (i + 1) % 100 == 0 or i == len(basic_files) - 1:
+                print(f"  [{i+1}/{len(basic_files)}] 成功 {success}, 失败 {failed}, "
+                      f"累计 {records:,} 条")
+
+        total_success += success
+        total_failed += failed
+        total_records += records
+
+    elapsed = time.time() - start_time
+    print(f"\n重算完成: 成功 {total_success}, 失败 {total_failed}, "
+          f"总记录 {total_records:,}, 耗时 {elapsed/60:.1f} 分钟")
+
+
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) > 1 and sys.argv[1] == "--recalc":
+        recalc()
+    else:
+        main()

@@ -6,12 +6,16 @@
 # 不带参数：执行全部流程
 # 带参数：执行指定步骤
 #   crawl      — 仅数据采集（A股+多市场）
+#   recalc     — 重算技术指标（不爬取，从basic重算advanced）
+#   fund-flow  — 爬取资金流数据
 #   convert    — 仅数据转换
+#   predict    — 生成预测性训练数据（实际收益标签）
 #   generate   — 数据增强（FinGPT+量化计算+推理链）
 #   merge      — 仅合并训练集
 #   train      — 仅训练
 #   export     — 导出 GGUF
 #   eval       — 模型评估
+#   backtest   — 回测验证
 #   all        — 全部流程
 # ============================================================
 
@@ -125,12 +129,12 @@ step_merge() {
         log "v1 指令数据已存在 (${v1_count} 条)"
     fi
 
-    # 合并全部数据源 → v3
+    # 合并全部数据源 → v4
     log "合并最终训练集..."
     python3 "$SCRIPTS_DIR/merge_and_retrain.py"
 
-    v3_count=$(wc -l < "$DATA_DIR/merged_train_v3.jsonl")
-    log "最终训练集: merged_train_v3.jsonl (${v3_count} 条)"
+    v4_count=$(wc -l < "$DATA_DIR/merged_train_v4.jsonl")
+    log "最终训练集: merged_train_v4.jsonl (${v4_count} 条)"
 }
 
 # ============================================================
@@ -139,7 +143,7 @@ step_merge() {
 step_train() {
     log "========== Step 4: QLoRA 训练 =========="
 
-    if [ ! -f "$DATA_DIR/merged_train_v3.jsonl" ]; then
+    if [ ! -f "$DATA_DIR/merged_train_v4.jsonl" ] && [ ! -f "$DATA_DIR/merged_train_v3_clean.jsonl" ]; then
         err "训练数据不存在，请先执行: bash run.sh merge"
     fi
 
@@ -163,7 +167,7 @@ step_train() {
     fi
 
     log "开始训练..."
-    python3 "$SCRIPTS_DIR/train.py"
+    "$PROJECT_DIR/finetune-env/bin/python3" "$SCRIPTS_DIR/train.py"
 
     log "训练完成！模型保存在: output/quant-qwen2.5-14b-lora/"
 }
@@ -216,8 +220,24 @@ case "$STEP" in
     crawl)
         step_crawl
         ;;
+    recalc)
+        log "========== 重算技术指标 =========="
+        python3 "$SCRIPTS_DIR/crawl_ashare.py" --recalc
+        python3 "$SCRIPTS_DIR/crawl_multi_market.py" --recalc
+        log "指标重算完成"
+        ;;
+    fund-flow)
+        log "========== 资金流数据采集 =========="
+        python3 "$SCRIPTS_DIR/crawl_fund_flow.py"
+        log "资金流采集完成"
+        ;;
     convert)
         step_convert
+        ;;
+    predict)
+        log "========== 预测性训练数据 =========="
+        python3 "$SCRIPTS_DIR/generate_predictive_data.py"
+        log "预测数据生成完成"
         ;;
     generate)
         step_generate
@@ -233,6 +253,11 @@ case "$STEP" in
         ;;
     eval)
         step_eval
+        ;;
+    backtest)
+        log "========== 回测验证 =========="
+        python3 "$SCRIPTS_DIR/backtest_signals.py"
+        log "回测完成"
         ;;
     all)
         step_crawl
@@ -251,15 +276,19 @@ case "$STEP" in
         python3 "$SCRIPTS_DIR/rag_serve.py"
         ;;
     *)
-        echo "用法: bash run.sh [crawl|convert|generate|merge|train|export|eval|rag-build|rag-serve|all]"
+        echo "用法: bash run.sh [crawl|recalc|fund-flow|convert|predict|generate|merge|train|export|eval|backtest|rag-build|rag-serve|all]"
         echo ""
         echo "  crawl      数据采集（A股+期货+ETF+可转债）"
+        echo "  recalc     重算技术指标（从basic重算，不爬取）"
+        echo "  fund-flow  爬取资金流数据"
         echo "  convert    行情数据 → 训练问答对"
+        echo "  predict    生成预测性训练数据（实际收益标签）"
         echo "  generate   数据增强（FinGPT+量化计算+推理链）"
         echo "  merge      合并所有数据源 → 最终训练集"
         echo "  train      QLoRA 微调训练"
         echo "  export     导出 GGUF 格式"
         echo "  eval       模型评估"
+        echo "  backtest   回测验证（对比沪深300）"
         echo "  rag-build  构建 RAG 检索索引"
         echo "  rag-serve  启动 RAG 增强推理服务"
         echo "  all        执行全部流程（默认）"

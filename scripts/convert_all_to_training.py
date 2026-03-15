@@ -1105,6 +1105,18 @@ def gen_trading_score(symbol, market_label, row, rows_context, prev_row=None,
                 bottom_reasons.append("MACD底背离")
     at_bottom = bottom_signals >= 2
 
+    # ---- 新增指标提取（安全取值，缺失时用默认值） ----
+    roc_12 = row.get("roc_12", 0) or 0
+    cci_20 = row.get("cci_20", 0) or 0
+    adx_14 = row.get("adx_14", 0) or 0
+    atr_14 = row.get("atr_14", 0) or 0
+    bb_position = row.get("bb_position", 0.5) or 0.5
+    mfi_14 = row.get("mfi_14", 50) or 50
+    hv_20 = row.get("hv_20", 0) or 0
+    obv_trend = row.get("obv_trend", "flat") or "flat"
+    ma_alignment = row.get("ma_alignment", "mixed") or "mixed"
+    williams_r = row.get("williams_r_14", -50) or -50
+
     # ---- 固定格式输入 ----
     question = (
         f"[MARKET_DATA]\n"
@@ -1123,6 +1135,16 @@ def gen_trading_score(symbol, market_label, row, rows_context, prev_row=None,
         f"turnover_rate: {turnover_rate:.2%}\n"
         f"total_shares: {total_shares_yi:.1f}亿股\n"
         f"at_bottom: {'true' if at_bottom else 'false'}\n"
+        f"roc_12: {roc_12:+.2f}%\n"
+        f"cci_20: {cci_20:.1f}\n"
+        f"adx_14: {adx_14:.1f}\n"
+        f"atr_14: {atr_14:.2f}\n"
+        f"bb_position: {bb_position:.2f}\n"
+        f"mfi_14: {mfi_14:.1f}\n"
+        f"hv_20: {hv_20:.1f}%\n"
+        f"williams_r_14: {williams_r:.1f}\n"
+        f"obv_trend: {obv_trend}\n"
+        f"ma_alignment: {ma_alignment}\n"
         f"{regime_block}"
         f"{position_block}"
         f"[PORTFOLIO]\n"
@@ -1218,6 +1240,76 @@ def gen_trading_score(symbol, market_label, row, rows_context, prev_row=None,
         score -= 5
         reasons.append(f"近5日跌幅{trend_5d:.1f}%，短期弱势")
         risk_factors.append("连续下跌趋势")
+
+    # CCI 极值贡献 (±5)
+    if cci_20 > 200:
+        score -= 5
+        reasons.append(f"CCI={cci_20:.0f}，极度超买")
+        risk_factors.append("CCI极端高位")
+    elif cci_20 > 100:
+        score -= 3
+        reasons.append(f"CCI={cci_20:.0f}，进入超买区")
+    elif cci_20 < -200:
+        score += 5
+        reasons.append(f"CCI={cci_20:.0f}，极度超卖，反弹概率大")
+    elif cci_20 < -100:
+        score += 3
+        reasons.append(f"CCI={cci_20:.0f}，进入超卖区")
+
+    # ADX 趋势强度（放大/抑制现有信号偏移量）
+    if adx_14 > 25:
+        # 强趋势：放大当前方向信号
+        adx_amplify = 3
+        if score > 55:
+            score += adx_amplify
+            reasons.append(f"ADX={adx_14:.0f}>25，趋势确认，信号增强")
+        elif score < 45:
+            score -= adx_amplify
+            reasons.append(f"ADX={adx_14:.0f}>25，下跌趋势确认")
+    elif adx_14 < 15:
+        # 无趋势：抑制信号，拉回中性
+        reasons.append(f"ADX={adx_14:.0f}<15，趋势极弱，宜观望")
+        risk_factors.append("ADX极低，无明确趋势")
+
+    # MFI 资金流确认 (±5)
+    if mfi_14 > 80:
+        score -= 5
+        reasons.append(f"MFI={mfi_14:.0f}，资金超买")
+    elif mfi_14 < 20:
+        score += 5
+        reasons.append(f"MFI={mfi_14:.0f}，资金超卖，吸筹迹象")
+
+    # BB 位置 + RSI 联动 (±4)
+    if bb_position < 0.1 and rsi < 35:
+        score += 4
+        reasons.append(f"布林带底部({bb_position:.2f})+RSI超卖，双重底部信号")
+    elif bb_position > 0.9 and rsi > 65:
+        score -= 4
+        reasons.append(f"布林带顶部({bb_position:.2f})+RSI偏强，短期过热")
+        risk_factors.append("布林带+RSI双重过热")
+
+    # HV 波动率风险 (±3)
+    if hv_20 > 60 and regime == "熊市":
+        score -= 3
+        reasons.append(f"HV={hv_20:.0f}%，熊市高波动，风险极高")
+        risk_factors.append("高波动+熊市，极端风险")
+
+    # 均线排列 (±3)
+    if ma_alignment == "bullish":
+        score += 3
+        reasons.append("均线多头排列（MA5>MA10>MA20>MA60）")
+    elif ma_alignment == "bearish":
+        score -= 3
+        reasons.append("均线空头排列（MA5<MA10<MA20<MA60）")
+        risk_factors.append("均线空头排列")
+
+    # OBV 量价配合 (±3)
+    if obv_trend == "rising" and score > 50:
+        score += 3
+        reasons.append("OBV上升趋势，量价配合")
+    elif obv_trend == "falling" and score < 50:
+        score -= 3
+        reasons.append("OBV下降趋势，资金持续流出")
 
     # 持仓盈亏影响 (±5)
     if holding:

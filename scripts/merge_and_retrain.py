@@ -5,6 +5,7 @@ v1: GitHub问答 + BAAI金融(关键词过滤) + 英文量化指令 (~30k)
 v2: 多市场行情技术分析对 (A股+期货+ETF+可转债, ~10k)
 v3: FinGPT + 量化计算 + 推理链增强 (可选)
 v4: BAAI全量中文金融 (~40k，替代v1中的BAAI子集)
+v5: 预测性训练数据（实际收益标签） + 板块轮动预测
 """
 
 import json
@@ -13,7 +14,7 @@ import hashlib
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(PROJECT_ROOT, "training-data")
-OUTPUT = os.path.join(DATA_DIR, "merged_train_v3.jsonl")
+OUTPUT = os.path.join(DATA_DIR, "merged_train_v4.jsonl")
 
 sources = [
     (os.path.join(DATA_DIR, "baai_zh_full.jsonl"), "baai_zh_finance"),
@@ -23,7 +24,13 @@ sources = [
     (os.path.join(DATA_DIR, "quant_calculations.jsonl"), "quant_calculations"),
     (os.path.join(DATA_DIR, "reasoning_enhanced.jsonl"), "reasoning_enhanced"),
     (os.path.join(DATA_DIR, "finance_r1_reasoning.jsonl"), "finance_r1_reasoning"),
+    # V3 预测引擎新增数据源
+    (os.path.join(DATA_DIR, "predictive_signals.jsonl"), "predictive_signals"),
+    (os.path.join(DATA_DIR, "sector_rotation.jsonl"), "sector_rotation"),
 ]
+
+# 预测数据过采样倍数（防止被40k知识QA淹没）
+OVERSAMPLE_SOURCES = {"predictive_signals": 2, "sector_rotation": 2}
 
 
 def user_hash(record):
@@ -70,6 +77,26 @@ with open(OUTPUT, "w", encoding="utf-8") as out:
         except FileNotFoundError:
             print(f"[SKIP] {path} 不存在（可选数据源，跳过）")
             continue
+
+        # 过采样：预测数据重复写入，防止被知识QA淹没
+        oversample = OVERSAMPLE_SOURCES.get(label, 1)
+        if oversample > 1 and count > 0:
+            extra_rounds = oversample - 1
+            extra_count = 0
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    for _ in range(extra_rounds):
+                        f.seek(0)
+                        for line in f:
+                            record = json.loads(line)
+                            record["source"] = label
+                            out.write(json.dumps(record, ensure_ascii=False) + "\n")
+                            extra_count += 1
+            except Exception:
+                pass
+            count += extra_count
+            print(f"  → 过采样 {oversample}x，额外写入 {extra_count} 条")
+
         source_counts[label] = count
         msg = f"[{label}] {count} 条"
         if skipped:
