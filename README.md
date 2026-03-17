@@ -274,7 +274,7 @@ from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, DATA_DIR, OUTPUT_DIR
                                               ↓
 第2层: 规则引擎（每日4000次，秒级）→ compute_score 初筛 → Top 50 候选
                                               ↓
-第3层: Qwen-14B 微调模型（每日50次，分钟级）→ 精排 → Top 10 + 仓位建议
+第3层: Qwen-14B Skills（每日50次，分钟级）→ StockRankSkill 精排 → Top 10 + 仓位建议
                                               ↓
                                    Claude 终审 → 风控 → 执行
 ```

@@ -40,7 +40,11 @@ parse_log_progress() {
     line=$(grep -oP '\d+%\|[^|]*\|\s*\d+/\d+\s*\[[\d:]+<[\d:]+,\s*[\d.]+s/it\]' "$LOG_FILE" | \
            while IFS= read -r l; do
                t=$(echo "$l" | grep -oP '\d+/\K\d+')
-               [ "$t" -gt 5000 ] 2>/dev/null && echo "$l"
+               s=$(echo "$l" | grep -oP '[\d.]+(?=s/it)')
+               # 过滤：总步数>5000 且速度<30s/it（排除 eval 后的异常估算）
+               if [ "$t" -gt 5000 ] 2>/dev/null; then
+                   awk "BEGIN{exit ($s < 30) ? 0 : 1}" && echo "$l"
+               fi
            done | tail -1)
 
     if [ -z "$line" ]; then
@@ -92,12 +96,25 @@ if [ -n "$progress" ]; then
     echo "  预计剩余: ${remaining}"
     echo "  速度: ${speed}s/step"
 
-    # 尝试从 checkpoint 获取 loss/lr
-    ckpt_info=$(parse_checkpoint)
-    if [ -n "$ckpt_info" ]; then
-        read -r loss lr <<< "$ckpt_info"
-        echo "  Loss: ${loss}"
-        echo "  LR: ${lr}"
+    # 优先从日志直接输出行获取 loss/lr/grad_norm/epoch（比 checkpoint 更实时）
+    log_loss_line=$(grep -P "^\{'loss'" "$LOG_FILE" | tail -1)
+    if [ -n "$log_loss_line" ]; then
+        loss=$(echo "$log_loss_line" | grep -oP "'loss':\s*'?\K[\d.]+")
+        lr=$(echo "$log_loss_line" | grep -oP "'learning_rate':\s*'?\K[\de.+-]+")
+        grad_norm=$(echo "$log_loss_line" | grep -oP "'grad_norm':\s*'?\K[\d.]+")
+        epoch=$(echo "$log_loss_line" | grep -oP "'epoch':\s*'?\K[\d.]+")
+        [ -n "$loss" ] && echo "  Loss: ${loss}"
+        [ -n "$grad_norm" ] && echo "  Grad Norm: ${grad_norm}"
+        [ -n "$lr" ] && echo "  LR: ${lr}"
+        [ -n "$epoch" ] && echo "  Epoch: ${epoch}"
+    else
+        # 回退：从 checkpoint 获取
+        ckpt_info=$(parse_checkpoint)
+        if [ -n "$ckpt_info" ]; then
+            read -r loss lr <<< "$ckpt_info"
+            echo "  Loss: ${loss}"
+            echo "  LR: ${lr}"
+        fi
     fi
 else
     # 回退：从 checkpoint 读取（旧模式）
