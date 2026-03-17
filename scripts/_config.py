@@ -85,7 +85,7 @@ OLLAMA_URL = cfg["ollama"]["url"]
 # ============================================================
 def call_ollama(model, messages, temperature=0.7, num_predict=4096,
                 max_retries=3, timeout=None, strip_think=False,
-                seed=None, format=None, think=None):
+                seed=None, format=None, think=None, num_gpu=None):
     """
     统一的 ollama 调用函数。
     model: 模型名称（如 qwen3:14b, deepseek-r1:32b）
@@ -121,6 +121,8 @@ def call_ollama(model, messages, temperature=0.7, num_predict=4096,
                 payload["format"] = format
             if think is not None:
                 payload["think"] = think
+            if num_gpu is not None:
+                payload["options"]["num_gpu"] = num_gpu
             resp = _requests.post(OLLAMA_URL, json=payload, timeout=timeout)
             resp.raise_for_status()
             content = resp.json()["message"]["content"]

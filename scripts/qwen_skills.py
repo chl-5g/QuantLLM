@@ -49,11 +49,17 @@ STOCK_RANK_OUTPUT_SCHEMA = {
 
 
 def _extract_json(text):
-    """从可能包含 markdown 代码块的文本中提取 JSON。"""
-    # 尝试直接解析
+    """从可能包含 markdown 代码块或 thinking 残留的文本中提取第一个完整 JSON。"""
     text = text.strip()
+    # 去掉 thinking 残留（模型可能在 JSON 后输出 </think> 和重复内容）
+    if "</think>" in text:
+        text = text[:text.index("</think>")].strip()
+    # 尝试直接解析
     if text.startswith("{"):
-        return json.loads(text)
+        # 用 raw_decode 只取第一个完整 JSON 对象
+        decoder = json.JSONDecoder()
+        obj, _ = decoder.raw_decode(text)
+        return obj
     # 提取 ```json ... ``` 块
     m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
     if m:
@@ -61,7 +67,9 @@ def _extract_json(text):
     # 提取第一个 { ... } 块
     m = re.search(r"\{.*\}", text, re.DOTALL)
     if m:
-        return json.loads(m.group(0))
+        decoder = json.JSONDecoder()
+        obj, _ = decoder.raw_decode(m.group(0))
+        return obj
     raise json.JSONDecodeError("No JSON found", text, 0)
 
 
@@ -84,23 +92,37 @@ def call_skill_stock_rank(market_regime, candidates, top_n=None):
 
     model = cfg["ollama"]["generation_model"]
 
+    # assistant prefill 绕过 qwen3 的 thinking 模式
+    # qwen3 无法通过 API 参数关闭 thinking，但预填 "{" 可强制直接输出 JSON
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user_msg},
+        {"role": "assistant", "content": '{"rankings": ['}
+    ]
+
+    # 训练期间 GPU 不够，用 CPU 推理；技能调用不频繁，CPU 速度可接受
+    num_gpu = skill_cfg.get("num_gpu")
+    extra = {}
+    if num_gpu is not None:
+        extra["num_gpu"] = num_gpu
+
     for attempt in range(2):
         raw = call_ollama(
             model=model,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user_msg}
-            ],
+            messages=messages,
             temperature=skill_cfg.get("temperature", 0),
             num_predict=skill_cfg.get("num_predict", 4096),
             seed=skill_cfg.get("seed", 42),
-            think=False,  # 关闭 thinking，结构化输出不需要推理链
+            **extra,
         )
         if raw is None:
             continue
 
+        # 拼回 prefill 的前缀
+        full_json = '{"rankings": [' + raw
+
         try:
-            data = _extract_json(raw)
+            data = _extract_json(full_json)
             jsonschema.validate(data, STOCK_RANK_OUTPUT_SCHEMA)
             data["rankings"] = data["rankings"][:top_n]
             return data["rankings"]

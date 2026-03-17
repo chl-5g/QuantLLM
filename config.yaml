@@ -80,6 +80,7 @@ skills:
     seed: 42
     num_predict: 4096
     top_n: 10                            # 精排输出 top N
+    num_gpu: 0                           # GPU 被训练占用时用 CPU 推理
 
 # ----------------------------------------------------------
 # System Prompt（所有训练数据统一）
