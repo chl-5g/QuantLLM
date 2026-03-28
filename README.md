@@ -24,6 +24,7 @@ bash /opt/quant-llm/run.sh train      # QLoRA 微调训练
 bash /opt/quant-llm/run.sh export     # 导出 GGUF 格式
 bash /opt/quant-llm/run.sh eval       # 模型评估
 bash /opt/quant-llm/run.sh backtest   # 回测验证（对比沪深300）
+bash /opt/quant-llm/run.sh trade-live # 双层实盘决策与交易日志
 ```
 
 `run.sh` 会自动完成环境检查、依赖验证、GPU 显存释放、数据路径配置等工作，无需手动干预。
@@ -267,16 +268,14 @@ from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, DATA_DIR, OUTPUT_DIR
 
 训练+回测验证后，接入东方财富模拟盘进行实盘模拟。
 
-**三层协作架构**：
+**两层协作架构（已切换）**：
 
 ```
-第1层: Claude Sonnet（每日1次）→ 宏观研判 → 动态调整规则引擎参数
-                                              ↓
-第2层: 规则引擎（每日4000次，秒级）→ compute_score 初筛 → Top 50 候选
-                                              ↓
-第3层: Qwen-14B Skills（每日50次，分钟级）→ StockRankSkill 精排 → Top 10 + 仓位建议
-                                              ↓
-                                   Claude 终审 → 风控 → 执行
+第1层: 规则引擎（秒级）→ compute_score 初筛 → Top 50 候选
+                                   ↓
+第2层: Qwen-14B Skills（分钟级）→ StockRankSkill 精筛 + 直接执行决策
+                                   ↓
+                         输出标准化交易指令 + 交易日志
 ```
 
 **牛熊市环境感知**（5维度融合评分）：
@@ -304,7 +303,7 @@ from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, DATA_DIR, OUTPUT_DIR
 - **训练数据**: 模板化规则引擎 + 预测性标签（实际收益） + 本地大模型辅助
 - **回测系统**: 走步验证，T+1约束，对比沪深300基准
 - **RAG**: FAISS + bge-large-zh-v1.5
-- **模拟盘**: 东方财富 Playwright 自动化 + Claude API 审核
+- **模拟盘**: 东方财富 Playwright 自动化 + Qwen14B 直接精筛/执行
 
 ## 免责声明
 

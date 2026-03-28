@@ -32,6 +32,7 @@ bash /opt/quant-llm/run.sh eval       # 评估（65题手写+holdout）
 bash /opt/quant-llm/run.sh rag-build  # 构建 RAG 检索索引
 bash /opt/quant-llm/run.sh rag-serve  # 启动 RAG 增强推理服务
 bash /opt/quant-llm/run.sh export     # 导出 GGUF
+bash /opt/quant-llm/run.sh trade-live # 双层实盘决策（规则+Qwen）
 
 # 直接运行单个脚本
 python scripts/evaluate.py --consistency 3   # 带一致性检测的评估
@@ -114,3 +115,10 @@ export_gguf.py                              → output/gguf/
 - 系统提示词定义在 `config.yaml` 的 `model.system_prompt`，所有数据生成脚本共用
 - 看训练进度 → 执行 `bash /opt/quant-llm/watch_training.sh`
 - 用户说"写入记忆" → 同时更新 MEMORY.md 和本文件（`/opt/quant-llm/CLAUDE.md`）
+
+
+## 实盘执行架构（更新）
+
+- 当前实盘流程为**两层**：`规则初筛 -> Qwen14B精筛/执行`
+- 不再依赖 Claude 终审环节
+- 交易指令与执行结果统一写入 `output/trade_logs/` 目录

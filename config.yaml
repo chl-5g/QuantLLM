@@ -20,10 +20,10 @@ data:
 # 模型配置
 # ----------------------------------------------------------
 model:
-  base_model: unsloth/Qwen2.5-14B-bnb-4bit
+  base_model: /root/.cache/huggingface/hub/models--unsloth--qwen2.5-14b-bnb-4bit/snapshots/7fb3a0220f2a2bb6a6565ca46b97bb3badb17ace
   max_seq_length: 2048
-  output_dir: output/quant-qwen2.5-14b-v3
-  version: v3                               # V3 预测引擎
+  output_dir: output/quant-qwen2.5-14b-v4
+  version: v4                               # V4 预测引擎
 
 # ----------------------------------------------------------
 # LoRA 配置
@@ -198,3 +198,16 @@ rag:
   top_k: 3
   score_threshold: 0.35
   max_ref_tokens: 460
+
+# ----------------------------------------------------------
+# 双层实盘执行配置（规则初筛 + Qwen14B 精筛/执行）
+# ----------------------------------------------------------
+trade_live:
+  max_universe: 1200               # 每次扫描股票数量上限
+  prefilter_top_k: 50              # 规则引擎初筛保留数量
+  max_positions: 10                # 精筛后持仓上限
+  enable_real_orders: false        # 默认关闭真实下单
+  log_dir: output/trade_logs
+  allocation:
+    strong_buy: 0.15               # strong_buy 原始权重
+    buy: 0.10                      # buy 原始权重

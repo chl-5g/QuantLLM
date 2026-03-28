@@ -16,6 +16,7 @@
 #   export     — 导出 GGUF
 #   eval       — 模型评估
 #   backtest   — 回测验证
+#   trade-live — 双层实盘决策（规则+Qwen）
 #   all        — 全部流程
 # ============================================================
 
@@ -259,6 +260,12 @@ case "$STEP" in
         python3 "$SCRIPTS_DIR/backtest_signals.py"
         log "回测完成"
         ;;
+    trade-live)
+        log "========== 双层实盘决策（规则+Qwen） =========="
+        shift || true
+        python3 "$SCRIPTS_DIR/trade_live_qwen.py" "$@"
+        log "交易决策完成"
+        ;;
     all)
         step_crawl
         step_convert
@@ -276,7 +283,7 @@ case "$STEP" in
         python3 "$SCRIPTS_DIR/rag_serve.py"
         ;;
     *)
-        echo "用法: bash run.sh [crawl|recalc|fund-flow|convert|predict|generate|merge|train|export|eval|backtest|rag-build|rag-serve|all]"
+        echo "用法: bash run.sh [crawl|recalc|fund-flow|convert|predict|generate|merge|train|export|eval|backtest|trade-live|rag-build|rag-serve|all]"
         echo ""
         echo "  crawl      数据采集（A股+期货+ETF+可转债）"
         echo "  recalc     重算技术指标（从basic重算，不爬取）"
