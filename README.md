@@ -266,14 +266,14 @@ from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, DATA_DIR, OUTPUT_DIR
 
 ## 模拟盘交易系统
 
-训练+回测验证后，接入东方财富模拟盘进行实盘模拟。
+训练+回测验证后，接入模拟盘/券商接口执行交易。目前仓库默认仅输出执行计划与交易日志，不直接下单。
 
 **两层协作架构（已切换）**：
 
 ```
 第1层: 规则引擎（秒级）→ compute_score 初筛 → Top 50 候选
                                    ↓
-第2层: Qwen-14B Skills（分钟级）→ StockRankSkill 精筛 + 直接执行决策
+第2层: Qwen-14B Skills（分钟级）→ StockRankSkill 精筛 + 生成执行计划
                                    ↓
                          输出标准化交易指令 + 交易日志
 ```
@@ -293,6 +293,23 @@ from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, DATA_DIR, OUTPUT_DIR
 - 总股本 < 20亿股（否则强制扣25分）
 - 底部信号检测（RSI<35 / MA偏离<-10% / 距52周低点<15% / MACD底背离）
 
+## 当前进展（2026-03-30）
+
+- 默认微调模型路径已切换到 `output/quant-qwen2.5-14b-v4-trapboost`（`config.yaml`）。
+- 完整门禁已跑完：`holdout 30 + 手写核心题 71`（总计 101 条）。
+- 对抗门禁结果：`15/15` 通过（`100%`），其中逻辑陷阱 `7/7` 通过。
+- 评分方向专项复核：`6/6` 通过（`100%`），结果见 `output/eval_score_recheck_trapboost.json`。
+- 异常字符门禁已集成到 `scripts/evaluate.py`（异常命中 -> 重采样 -> 模板降级）。
+- 当前 `scripts/trade_live_qwen.py` 的 `--execute` 仅切换模式标识并输出计划，尚未发起真实下单请求。
+
+## 明日计划
+
+1. **输出稳健性**：补充“只保留首个 JSON 结果块”的后处理，清理尾部异常字符污染。
+2. **交易执行接入**：选定模拟盘/券商 API（优先东方财富模拟盘）并实现下单适配层。
+3. **风控闭环**：将 `execution_plan` 映射到下单请求，增加幂等保护、失败回滚、限频和仓位校验。
+4. **联调验证**：先 dry-run 对齐，再小规模模拟盘联调，确认回执、持仓、日志三方一致。
+5. **上线开关**：联调通过后，再开放自动执行开关并保留一键熔断能力。
+
 ## 技术栈
 
 - **基座模型**: [Qwen2.5-14B](https://huggingface.co/Qwen/Qwen2.5-14B) (4bit 量化)
@@ -303,7 +320,7 @@ from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, DATA_DIR, OUTPUT_DIR
 - **训练数据**: 模板化规则引擎 + 预测性标签（实际收益） + 本地大模型辅助
 - **回测系统**: 走步验证，T+1约束，对比沪深300基准
 - **RAG**: FAISS + bge-large-zh-v1.5
-- **模拟盘**: 东方财富 Playwright 自动化 + Qwen14B 直接精筛/执行
+- **模拟盘**: 东方财富 Playwright（待与交易接口打通） + Qwen14B 精筛/计划生成
 
 ## 免责声明
 
