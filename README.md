@@ -97,9 +97,15 @@ from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, DATA_DIR, OUTPUT_DIR
 │   ├── rag_build_index.py             #   构建 RAG 检索索引
 │   ├── rag_retrieve.py                #   RAG 检索引擎
 │   ├── rag_serve.py                   #   RAG 增强推理服务
+│   ├── qwen_skills.py                 #   Qwen Skills（结构化精排，JSON 约束）
 │   ├── eastmoney_login.py             #   东方财富模拟盘认证
+│   ├── eastmoney_executor.py          #   Playwright 执行器（买卖提交 + 回执核验）
 │   ├── eastmoney_keepalive.py         #   模拟盘 session 保活守护
-│   └── eastmoney_check.py             #   模拟盘凭据验证
+│   ├── eastmoney_check.py             #   模拟盘凭据验证
+│   ├── trade_execution.py             #   执行核心（风控、幂等、限频、适配器分发）
+│   ├── trade_live_qwen.py             #   双层实盘入口（规则初筛 -> Qwen 精排 -> 执行）
+│   ├── trade_live_validate.py         #   dry-run / execute / sim 联调验证
+│   └── trade_session_runner.py        #   交易时段自动调度器（含竞价 dry-run 策略）
 │
 ├── training-data/                     # 所有训练数据（.gitignore 忽略）
 │   ├── ashare/                        #   A股行情（~5000只，含28个技术指标）
@@ -264,16 +270,16 @@ from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, DATA_DIR, OUTPUT_DIR
 
 ## 模拟盘交易系统
 
-训练+回测验证后，接入模拟盘/券商接口执行交易。目前仓库默认仅输出执行计划与交易日志，不直接下单。
+训练+回测验证后，已接入东方财富模拟盘执行链路，支持 `eastmoney_paper`（本地仓位仿真）与 `eastmoney_sim`（Playwright 页面执行）。
 
 **两层协作架构（已切换）**：
 
 ```
 第1层: 规则引擎（秒级）→ compute_score 初筛 → Top 50 候选
                                    ↓
-第2层: Qwen-14B Skills（分钟级）→ StockRankSkill 精筛 + 生成执行计划
+第2层: Qwen Skills（分钟级）→ StockRankSkill 精筛 + 生成执行计划
                                    ↓
-                         输出标准化交易指令 + 交易日志
+                trade_execution 风控/幂等/限频 + eastmoney 适配执行 + 交易日志
 ```
 
 **牛熊市环境感知**（5维度融合评分）：
@@ -294,19 +300,17 @@ from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, DATA_DIR, OUTPUT_DIR
 ## 当前进展（2026-03-30）
 
 - 默认微调模型路径已切换到 `output/quant-qwen2.5-14b-v4-trapboost`（`config.yaml`）。
-- 完整门禁已跑完：`holdout 30 + 手写核心题 71`（总计 101 条）。
-- 对抗门禁结果：`15/15` 通过（`100%`），其中逻辑陷阱 `7/7` 通过。
-- 评分方向专项复核：`6/6` 通过（`100%`），结果见 `output/eval_score_recheck_trapboost.json`。
-- 异常字符门禁已集成到 `scripts/evaluate.py`（异常命中 -> 重采样 -> 模板降级）。
-- 当前 `scripts/trade_live_qwen.py` 的 `--execute` 仅切换模式标识并输出计划，尚未发起真实下单请求。
+- 门禁链路已跑完：`holdout + 核心题 + 对抗题 + 评分方向复核`，评分方向专项 `6/6` 通过。
+- `qwen_skills.py` 已增加稳健 JSON 提取（仅解析首个 JSON 对象），并支持实盘场景短超时/快速回退配置。
+- `trade_execution.py` 已接入执行层风控：单票/总仓位上限、日内限频、幂等、kill switch、失败回滚队列。
+- `eastmoney_executor.py` 已接入 Playwright 提交逻辑：下单按钮可用性判断、提交后回执核验、失败原因落盘。
+- `trade_live_validate.py` 可一键验证 `dry-run + execute(paper) + execute(sim)` 三段链路一致性。
+- 新增 `trade_session_runner.py`，支持交易时段自动调度：
+  - `09:15-09:25` 仅 `dry-run`（集合竞价预热）
+  - `09:30-11:30`、`13:00-15:00` 执行 `--execute`
+  - 全量策略日志与交易日志可输出到 `Desktop/stock`
 
-## 明日计划
-
-1. **输出稳健性**：补充“只保留首个 JSON 结果块”的后处理，清理尾部异常字符污染。
-2. **交易执行接入**：选定模拟盘/券商 API（优先东方财富模拟盘）并实现下单适配层。
-3. **风控闭环**：将 `execution_plan` 映射到下单请求，增加幂等保护、失败回滚、限频和仓位校验。
-4. **联调验证**：先 dry-run 对齐，再小规模模拟盘联调，确认回执、持仓、日志三方一致。
-5. **上线开关**：联调通过后，再开放自动执行开关并保留一键熔断能力。
+> 说明：若东方财富页面下单按钮处于禁用状态（常见于非交易时段），系统会返回 `submit_button_disabled` 并阻断提交，不会盲目报单。
 
 ## 技术栈
 
@@ -318,7 +322,7 @@ from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, DATA_DIR, OUTPUT_DIR
 - **训练数据**: 模板化规则引擎 + 预测性标签（实际收益） + 本地大模型辅助
 - **回测系统**: 走步验证，T+1约束，对比沪深300基准
 - **RAG**: FAISS + bge-large-zh-v1.5
-- **模拟盘**: 东方财富 Playwright（待与交易接口打通） + Qwen14B 精筛/计划生成
+- **模拟盘**: 东方财富 Playwright 执行器 + Qwen Skills 精排 + 交易时段自动调度器
 
 ## 免责声明
 
