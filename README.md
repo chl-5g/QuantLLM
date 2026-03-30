@@ -77,7 +77,7 @@ from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, DATA_DIR, OUTPUT_DIR
 ├── LICENSE
 ├── .gitignore
 │
-├── scripts/                           # 所有 Python 脚本
+├── scripts/                           # 生产链路 Python 脚本
 │   ├── _config.py                     #   配置加载器（所有脚本共用）
 │   ├── indicators.py                  #   技术指标共享库（28个指标）
 │   ├── crawl_ashare.py                #   A股全量历史行情爬取（--recalc 重算指标）
@@ -106,6 +106,17 @@ from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, DATA_DIR, OUTPUT_DIR
 │   ├── trade_live_qwen.py             #   双层实盘入口（规则初筛 -> Qwen 精排 -> 执行）
 │   ├── trade_live_validate.py         #   dry-run / execute / sim 联调验证
 │   └── trade_session_runner.py        #   交易时段自动调度器（含竞价 dry-run 策略）
+│
+├── archive/                           # 历史与工具归档（不参与生产链路）
+│   ├── legacy/                        #   旧版备份脚本/配置（.bak 等）
+│   └── tools/
+│       └── scripts/                   #   一次性/测试脚本，按用途分组
+│           ├── data/                  #   数据清洗与 trapboost 工具
+│           ├── eval/                  #   评估对比与对抗测试工具
+│           ├── rag/                   #   RAG 附加处理工具
+│           └── test/                  #   独立测试脚本
+│
+├── logs/                              # 交易与策略日志（按 YYYY-MM-DD 分目录）
 │
 ├── training-data/                     # 所有训练数据（.gitignore 忽略）
 │   ├── ashare/                        #   A股行情（~5000只，含28个技术指标）
