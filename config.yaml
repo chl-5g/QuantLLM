@@ -22,8 +22,8 @@ data:
 model:
   base_model: /root/.cache/huggingface/hub/models--unsloth--qwen2.5-14b-bnb-4bit/snapshots/7fb3a0220f2a2bb6a6565ca46b97bb3badb17ace
   max_seq_length: 2048
-  output_dir: output/quant-qwen2.5-14b-v4
-  version: v4                               # V4 预测引擎
+  output_dir: output/quant-qwen2.5-14b-v4-trapboost
+  version: v4-trapboost                               # trapboost 预测引擎
 
 # ----------------------------------------------------------
 # LoRA 配置
@@ -67,9 +67,10 @@ training:
 ollama:
   url: http://127.0.0.1:11434/api/chat
   generation_model: qwen3:14b          # 种子扩展
+  live_rank_model: qwen3:4b-nothink    # 实盘精排优先模型（低延迟）
   reasoning_model: deepseek-r1:32b     # 推理链增强
   temperature: 0.7
-  timeout: 180                         # 秒
+  timeout: 300                         # 秒
 
 # ----------------------------------------------------------
 # Qwen3 Skills（精排等结构化任务）
@@ -78,9 +79,11 @@ skills:
   stock_rank:
     temperature: 0
     seed: 42
-    num_predict: 4096
+    num_predict: 1024
+    timeout: 90                         # 单次精排超时，超时后快速回退
+    attempts: 1                         # 技能层尝试次数（失败走规则兜底）
+    ollama_max_retries: 1              # 底层 HTTP 重试次数
     top_n: 10                            # 精排输出 top N
-    num_gpu: 0                           # GPU 被训练占用时用 CPU 推理
 
 # ----------------------------------------------------------
 # System Prompt（所有训练数据统一）
@@ -148,7 +151,7 @@ risk_control:
   take_profit_target: 2.0            # 目标净值倍数（翻倍止盈，提取利润）
   # 日度限制
   max_daily_loss_pct: -0.03          # 单日最大亏损（-3%触发暂停）
-  max_daily_trades: 5                # 单日最大交易笔数
+  max_daily_trades: 20                # 单日最大交易笔数
   # 市场环境
   turbulence_threshold: 3.0          # 波动率异常倍数（>3σ自动减仓）
   # 交易成本仿真
@@ -206,8 +209,21 @@ trade_live:
   max_universe: 1200               # 每次扫描股票数量上限
   prefilter_top_k: 50              # 规则引擎初筛保留数量
   max_positions: 10                # 精筛后持仓上限
-  enable_real_orders: false        # 默认关闭真实下单
+  enable_real_orders: true        # 允许真实下单（仍需 trade_live_qwen.py --execute）
+  broker: eastmoney_paper            # eastmoney_paper/eastmoney_sim
+  min_rebalance_delta: 0.01          # 调仓最小变动阈值(1%)
+  kill_switch_file: output/trade_live.KILL  # 存在即阻断 execute
   log_dir: output/trade_logs
   allocation:
     strong_buy: 0.15               # strong_buy 原始权重
     buy: 0.10                      # buy 原始权重
+  eastmoney_zjzh: 260680400000080882  # 强制执行账户：模拟组合6880882
+  regime_target_exposure:
+    bull: 0.95
+    sideways: 0.50
+    bear: 0.30
+  regime_max_positions:
+    bull: 10
+    sideways: 5
+    bear: 3
+  score_weight_power: 1.0

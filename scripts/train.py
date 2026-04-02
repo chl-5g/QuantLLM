@@ -10,6 +10,10 @@ import os
 import warnings
 warnings.filterwarnings("ignore")
 
+# Force offline-safe startup on restricted networks.
+os.environ.setdefault('UNSLOTH_DISABLE_STATISTICS', '1')
+os.environ.setdefault('HF_HUB_OFFLINE', '1')
+
 from unsloth import FastLanguageModel
 from trl import SFTTrainer
 from transformers import TrainingArguments, EarlyStoppingCallback
@@ -36,6 +40,7 @@ model, tokenizer = FastLanguageModel.from_pretrained(
     model_name=MODEL_NAME,
     max_seq_length=MAX_SEQ_LENGTH,
     load_in_4bit=True,
+    local_files_only=True,
 )
 
 # ============================================================

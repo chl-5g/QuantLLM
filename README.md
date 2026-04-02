@@ -92,19 +92,14 @@ from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, DATA_DIR, OUTPUT_DIR
 │   ├── train.py                       #   QLoRA微调训练（early stopping+验证集）
 │   ├── evaluate.py                    #   模型评估（ROUGE-L+结构化+对抗性测试）
 │   ├── backtest_signals.py            #   回测系统（个股+ETF轮动 vs 沪深300）
-│   ├── factor_ic_analysis.py          #   因子IC分析（Rank IC验证因子有效性）
 │   ├── export_gguf.py                 #   导出 GGUF 格式
 │   ├── rag_build_index.py             #   构建 RAG 检索索引
 │   ├── rag_retrieve.py                #   RAG 检索引擎
 │   ├── rag_serve.py                   #   RAG 增强推理服务
 │   ├── qwen_skills.py                 #   Qwen Skills（结构化精排，JSON 约束）
-│   ├── eastmoney_login.py             #   东方财富模拟盘认证
-│   ├── eastmoney_executor.py          #   （历史）Playwright 执行器，默认链路已停用
-│   ├── eastmoney_keepalive.py         #   模拟盘 session 保活守护
-│   ├── eastmoney_check.py             #   模拟盘凭据验证
+│   ├── eastmoney_http_api.py          #   东方财富模拟盘 HTTP API 客户端
 │   ├── trade_execution.py             #   执行核心（API直连、风控、幂等、限频、两阶段执行）
 │   ├── trade_live_qwen.py             #   双层实盘入口（规则初筛 -> Qwen 精排 -> 执行）
-│   ├── trade_live_validate.py         #   dry-run / execute / sim 联调验证
 │   └── trade_session_runner.py        #   交易时段自动调度器（含竞价 dry-run 策略）
 │
 ├── archive/                           # 历史与工具归档（不参与生产链路）
@@ -293,6 +288,17 @@ from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, DATA_DIR, OUTPUT_DIR
                 trade_execution 两阶段执行（先持仓处置，再资金驱动买入）+ 风控/幂等/限频 + 交易日志
 ```
 
+**轮询与执行节奏**：
+- 调度频率：交易时段内每 5 分钟一轮（可配 `--interval-sec`）
+- 预热时段：`09:15-09:25` 仅 `dry-run`
+- 执行时段：`09:30-11:30`、`13:00-15:00` 执行 `--execute`
+
+**仓位策略（按市场环境）**：
+- `bull`：目标总仓位 `95%`，最多 `10` 只
+- `sideways`：目标总仓位 `50%`，最多 `5` 只
+- `bear`：目标总仓位 `30%`，最多 `3` 只
+- 个股仓位由 `score` 归一化分配（`score_weight_power` 可调）
+
 **牛熊市环境感知**（5维度融合评分）：
 
 | 维度 | 指标 | 牛市信号 | 熊市信号 |
@@ -313,11 +319,11 @@ from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, DATA_DIR, OUTPUT_DIR
 - 默认微调模型路径已切换到 `output/quant-qwen2.5-14b-v4-trapboost`（`config.yaml`）。
 - 门禁链路已跑完：`holdout + 核心题 + 对抗题 + 评分方向复核`，评分方向专项 `6/6` 通过。
 - `qwen_skills.py` 已增加稳健 JSON 提取（仅解析首个 JSON 对象），并支持实盘场景短超时/快速回退配置。
-- `trade_execution.py` 已切换为 **API 直连执行**：默认不再依赖 Playwright，支持持仓先卖后买、当日未完成委托去重、账户强制绑定（`trade_live.eastmoney_zjzh`）。
+- `trade_execution.py` 已切换为 **API 直连执行**：移除 Playwright 相关执行链路，支持持仓先卖后买、当日未完成委托去重、账户强制绑定（`trade_live.eastmoney_zjzh`）。
 - 当前执行账户已固定为 `模拟组合6880882`（`zjzh=260680400000080882`），避免多模拟账户串单。
 - 下单逻辑已改为 **score 驱动仓位/金额**：高分买入更大、低分卖出更多；叠加 `max_buy/max_sell`、可用资金和 100 股手数约束。
 - 行情取价改为严格模式：优先实时行情 API；取价失败直接 `quote_api_unavailable` 跳过，不再用固定价格盲目报单。
-- `trade_live_validate.py` 可验证 `dry-run + execute(paper) + execute(sim)` 三段链路一致性（sim 为 API 直连）。
+- 行情取价已增加双源容灾：主源 `push2` + 备用 `push2delay`，两源都失败才 `skip`。
 - `trade_session_runner.py` 支持交易时段自动调度，并在归档日志文件名中追加 `股票代码_股票名` 标识：
   - `09:15-09:25` 仅 `dry-run`（集合竞价预热）
   - `09:30-11:30`、`13:00-15:00` 执行 `--execute`
@@ -336,7 +342,7 @@ from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, DATA_DIR, OUTPUT_DIR
 - **训练数据**: 模板化规则引擎 + 预测性标签（实际收益） + 本地大模型辅助
 - **回测系统**: 走步验证，T+1约束，对比沪深300基准
 - **RAG**: FAISS + bge-large-zh-v1.5
-- **模拟盘**: 东方财富 HTTP API 直连执行 + Qwen Skills 精排 + 交易时段自动调度器（Playwright 默认停用）
+- **模拟盘**: 东方财富 HTTP API 直连执行 + Qwen Skills 精排 + 交易时段自动调度器
 
 ## 免责声明
 

@@ -9,19 +9,48 @@ import json
 import os
 import random
 import argparse
+import re
 import warnings
 warnings.filterwarnings("ignore")
 
+os.environ.setdefault("UNSLOTH_DISABLE_STATISTICS", "1")
+os.environ.setdefault("TRANSFORMERS_NO_ADVISORY_WARNINGS", "1")
+import logging
+logging.Logger.warning_once = lambda self, *args, **kwargs: None
+try:
+    from transformers.utils import logging as hf_logging
+    hf_logging.set_verbosity_error()
+    hf_logging.disable_progress_bar()
+except Exception:
+    pass
+for _name in ("transformers", "transformers.modeling_attn_mask_utils"):
+    _lg = logging.getLogger(_name)
+    _lg.setLevel(logging.ERROR)
+    _lg.warning = lambda *args, **kwargs: None
+    _lg.warning_once = lambda *args, **kwargs: None
+
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_FILE = os.path.join(PROJECT_ROOT, "training-data", "merged_train_v3.jsonl")
+_SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
+import sys
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+from _config import OUTPUT_DIR as _CFG_OUTPUT_DIR, MODEL_NAME as _CFG_MODEL_NAME, MAX_SEQ_LENGTH
+
+_v4 = os.path.join(PROJECT_ROOT, "training-data", "merged_train_v4.jsonl")
+_v3c = os.path.join(PROJECT_ROOT, "training-data", "merged_train_v3_clean.jsonl")
+DATA_FILE = (
+    _v4
+    if os.path.exists(_v4)
+    else (_v3c if os.path.exists(_v3c) else os.path.join(PROJECT_ROOT, "training-data", "merged_train_v3.jsonl"))
+)
 HOLDOUT_FILE = os.path.join(PROJECT_ROOT, "training-data", "eval_holdout.jsonl")
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "output")
 RESULTS_FILE = os.path.join(OUTPUT_DIR, "eval_results.json")
 CHECKPOINT_FILE = os.path.join(OUTPUT_DIR, "eval_checkpoint.jsonl")
-MODEL_DIR = os.path.join(OUTPUT_DIR, "quant-qwen2.5-14b-lora-r32")
+MODEL_DIR = _CFG_OUTPUT_DIR
 CAT_SCORE_RATIONALITY = "评分合理性"
-BASE_MODEL = "unsloth/Qwen2.5-14B-bnb-4bit"
-MAX_SEQ_LENGTH = 2048
+BASE_MODEL = _CFG_MODEL_NAME
+DEFAULT_ABNORMAL_PATTERN = r"[\u0E00-\u0E7F\u0E80-\u0EFF\u0600-\u06FF]"
 
 # ============================================================
 # 手写测试题（50 条）
@@ -148,7 +177,8 @@ def prepare_holdout(data_file, holdout_file, ratio=0.02, seed=42):
     return holdout
 
 
-def generate_response(model, tokenizer, question, system_prompt=None, max_tokens=512):
+def generate_response(model, tokenizer, question, system_prompt=None, max_tokens=512,
+                      temperature=0.7, top_p=0.9, do_sample=True):
     """用模型生成回答"""
     if system_prompt is None:
         system_prompt = "你是一个专业的量化交易专家，擅长策略开发、因子分析、回测评估和风险管理。"
@@ -165,14 +195,122 @@ def generate_response(model, tokenizer, question, system_prompt=None, max_tokens
         outputs = model.generate(
             **inputs,
             max_new_tokens=max_tokens,
-            temperature=0.7,
-            top_p=0.9,
-            do_sample=True,
+            temperature=temperature,
+            top_p=top_p,
+            do_sample=do_sample,
             pad_token_id=tokenizer.eos_token_id,
         )
     response = tokenizer.decode(outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
     return response.strip()
 
+
+def _contains_abnormal_chars(text, abnormal_regex):
+    return bool(re.search(abnormal_regex, text))
+
+
+def _score_template_fallback(question):
+    """评分题降级模板：在异常字符无法恢复时，给出可解析 score JSON。"""
+    score = 50
+
+    rsi = re.search(r'rsi_14\s*:\s*([\-\d\.]+)', question, flags=re.I)
+    trend = re.search(r'trend_5d\s*:\s*([+\-]?\d+\.?\d*)%', question, flags=re.I)
+    ma20 = re.search(r'ma20_diff_pct\s*:\s*([+\-]?\d+\.?\d*)%', question, flags=re.I)
+
+    if rsi:
+        v = float(rsi.group(1))
+        if v >= 80:
+            score -= 22
+        elif v <= 20:
+            score += 22
+
+    if trend:
+        v = float(trend.group(1))
+        if v >= 8:
+            score -= 18
+        elif v <= -8:
+            score += 18
+
+    if ma20:
+        v = float(ma20.group(1))
+        if v >= 8:
+            score -= 10
+        elif v <= -8:
+            score += 10
+
+    score = max(0, min(100, int(round(score))))
+    action = "hold"
+    if score >= 70:
+        action = "buy"
+    elif score <= 30:
+        action = "sell"
+
+    return json.dumps({
+        "action": action,
+        "score": score,
+        "reason": "触发异常字符门禁后降级模板输出，建议结合更多市场数据复核。",
+        "risk": "仅供参考，不构成投资建议。"
+    }, ensure_ascii=False)
+
+
+def _generic_template_fallback(_question):
+    return "检测到异常字符输出，已降级为安全模板答复。建议重试并结合风险控制，不构成投资建议。"
+
+
+def generate_response_guarded(model, tokenizer, question, system_prompt=None, max_tokens=512,
+                              enable_guard=False,
+                              abnormal_regex=DEFAULT_ABNORMAL_PATTERN,
+                              retry_temperature=0.2,
+                              retry_top_p=0.8,
+                              fallback_mode="none"):
+    """带异常字符门禁的生成：首答 -> 重采样 -> 降级模板（可选）"""
+    meta = {
+        "abnormal_first_hit": False,
+        "resampled": False,
+        "resample_fixed": False,
+        "fallback_used": False,
+        "final_abnormal": False,
+    }
+
+    first = generate_response(
+        model,
+        tokenizer,
+        question,
+        system_prompt=system_prompt,
+        max_tokens=max_tokens,
+    )
+
+    if not enable_guard:
+        return first, meta
+
+    if not _contains_abnormal_chars(first, abnormal_regex):
+        return first, meta
+
+    meta["abnormal_first_hit"] = True
+    meta["resampled"] = True
+
+    second = generate_response(
+        model,
+        tokenizer,
+        question,
+        system_prompt=system_prompt,
+        max_tokens=max_tokens,
+        temperature=retry_temperature,
+        top_p=retry_top_p,
+        do_sample=True,
+    )
+
+    if not _contains_abnormal_chars(second, abnormal_regex):
+        meta["resample_fixed"] = True
+        return second, meta
+
+    if fallback_mode == "template":
+        meta["fallback_used"] = True
+        if "[MARKET_DATA]" in question or "交易评分" in question or "score" in question.lower():
+            return _score_template_fallback(question), meta
+        return _generic_template_fallback(question), meta
+
+    meta["final_abnormal"] = True
+    return second, meta
 
 def compute_rouge_l(prediction, reference):
     """计算 ROUGE-L F1"""
@@ -284,7 +422,13 @@ def save_checkpoint_item(checkpoint_file, result):
 
 
 def evaluate_model(model, tokenizer, test_data, label="model", consistency_rounds=0,
-                   checkpoint_file=None):
+                   checkpoint_file=None,
+                   enable_abnormal_guard=False,
+                   abnormal_regex=DEFAULT_ABNORMAL_PATTERN,
+                   abnormal_retry_temperature=0.2,
+                   abnormal_retry_top_p=0.8,
+                   abnormal_fallback_mode="none",
+                   guard_stats=None):
     """评估模型
     consistency_rounds: >0 时对手写题额外生成 N 轮，检测回复一致性
     checkpoint_file: 指定 checkpoint 文件路径，支持断点续传
@@ -318,7 +462,24 @@ def evaluate_model(model, tokenizer, test_data, label="model", consistency_round
             reference = next((m["content"] for m in messages if m["role"] == "assistant"), "")
             category = "holdout"
 
-        response = generate_response(model, tokenizer, question)
+        use_abnormal_guard = enable_abnormal_guard and category != CAT_SCORE_RATIONALITY
+        response, guard_meta = generate_response_guarded(
+            model,
+            tokenizer,
+            question,
+            max_tokens=192,
+            enable_guard=use_abnormal_guard,
+            abnormal_regex=abnormal_regex,
+            retry_temperature=abnormal_retry_temperature,
+            retry_top_p=abnormal_retry_top_p,
+            fallback_mode=abnormal_fallback_mode,
+        )
+
+        if use_abnormal_guard and guard_stats is not None:
+            guard_stats["total"] = guard_stats.get("total", 0) + 1
+            for key in ["abnormal_first_hit", "resampled", "resample_fixed", "fallback_used", "final_abnormal"]:
+                if guard_meta.get(key):
+                    guard_stats[key] = guard_stats.get(key, 0) + 1
 
         result = {
             "_label": label,
@@ -329,6 +490,11 @@ def evaluate_model(model, tokenizer, test_data, label="model", consistency_round
             "response_length": len(response),
             "response": response[:500],
         }
+        if "expect_direction" in item:
+            result["expect_direction"] = item["expect_direction"]
+
+        if use_abnormal_guard:
+            result["abnormal_guard"] = guard_meta
 
         # ROUGE-L（仅 holdout 有参考答案）
         if reference:
@@ -491,6 +657,11 @@ def main():
     parser.add_argument("--holdout-only", action="store_true", help="仅评估 holdout 数据")
     parser.add_argument("--max-holdout", type=int, default=100, help="最多评估的 holdout 条数")
     parser.add_argument("--consistency", type=int, default=0, help="一致性检测轮数（0=关闭，2=推荐）")
+    parser.add_argument("--abnormal-guard", action="store_true", help="启用异常字符门禁（默认关闭，不影响原流程）")
+    parser.add_argument("--abnormal-pattern", type=str, default=DEFAULT_ABNORMAL_PATTERN, help="异常字符正则")
+    parser.add_argument("--abnormal-retry-temperature", type=float, default=0.2, help="异常字符重采样 temperature")
+    parser.add_argument("--abnormal-retry-top-p", type=float, default=0.8, help="异常字符重采样 top_p")
+    parser.add_argument("--abnormal-fallback", type=str, default="none", choices=["none", "template"], help="重采样仍异常时处理策略")
     args = parser.parse_args()
 
     print("=" * 60)
@@ -514,6 +685,9 @@ def main():
 
     print(f"总测试: {len(test_data)} 条")
 
+    finetuned_guard_stats = {"total": 0, "abnormal_first_hit": 0, "resampled": 0, "resample_fixed": 0, "fallback_used": 0, "final_abnormal": 0}
+    baseline_guard_stats = {"total": 0, "abnormal_first_hit": 0, "resampled": 0, "resample_fixed": 0, "fallback_used": 0, "final_abnormal": 0}
+
     # 加载微调模型
     print(f"\n加载微调模型: {MODEL_DIR}")
     from unsloth import FastLanguageModel
@@ -521,6 +695,7 @@ def main():
         model_name=MODEL_DIR,
         max_seq_length=MAX_SEQ_LENGTH,
         load_in_4bit=True,
+        local_files_only=True,
     )
     FastLanguageModel.for_inference(model)
 
@@ -530,8 +705,22 @@ def main():
     print("\n评估微调模型...")
     finetuned_results = evaluate_model(model, tokenizer, test_data, label="finetuned",
                                        consistency_rounds=args.consistency,
-                                       checkpoint_file=CHECKPOINT_FILE)
+                                       checkpoint_file=CHECKPOINT_FILE,
+                                       enable_abnormal_guard=args.abnormal_guard,
+                                       abnormal_regex=args.abnormal_pattern,
+                                       abnormal_retry_temperature=args.abnormal_retry_temperature,
+                                       abnormal_retry_top_p=args.abnormal_retry_top_p,
+                                       abnormal_fallback_mode=args.abnormal_fallback,
+                                       guard_stats=finetuned_guard_stats)
     print_summary(finetuned_results, label="微调模型")
+
+    if args.abnormal_guard:
+        total = max(1, finetuned_guard_stats.get("total", 0))
+        print("\n  异常字符门禁统计(微调模型):")
+        print(f"    首次命中: {finetuned_guard_stats.get('abnormal_first_hit', 0)}/{finetuned_guard_stats.get('total', 0)} ({finetuned_guard_stats.get('abnormal_first_hit', 0)/total*100:.1f}%)")
+        print(f"    重采样修复: {finetuned_guard_stats.get('resample_fixed', 0)}")
+        print(f"    降级模板: {finetuned_guard_stats.get('fallback_used', 0)}")
+        print(f"    最终仍异常: {finetuned_guard_stats.get('final_abnormal', 0)}")
 
     all_results = {"finetuned": finetuned_results}
 
@@ -547,14 +736,28 @@ def main():
             model_name=BASE_MODEL,
             max_seq_length=MAX_SEQ_LENGTH,
             load_in_4bit=True,
+            local_files_only=True,
         )
         FastLanguageModel.for_inference(base_model)
 
         print("\n评估基座模型...")
         baseline_results = evaluate_model(base_model, base_tokenizer, test_data, label="baseline",
                                           consistency_rounds=args.consistency,
-                                          checkpoint_file=CHECKPOINT_FILE)
+                                          checkpoint_file=CHECKPOINT_FILE,
+                                          enable_abnormal_guard=args.abnormal_guard,
+                                          abnormal_regex=args.abnormal_pattern,
+                                          abnormal_retry_temperature=args.abnormal_retry_temperature,
+                                          abnormal_retry_top_p=args.abnormal_retry_top_p,
+                                          abnormal_fallback_mode=args.abnormal_fallback,
+                                          guard_stats=baseline_guard_stats)
         print_summary(baseline_results, label="基座模型")
+        if args.abnormal_guard:
+            total = max(1, baseline_guard_stats.get("total", 0))
+            print("\n  异常字符门禁统计(基座模型):")
+            print(f"    首次命中: {baseline_guard_stats.get('abnormal_first_hit', 0)}/{baseline_guard_stats.get('total', 0)} ({baseline_guard_stats.get('abnormal_first_hit', 0)/total*100:.1f}%)")
+            print(f"    重采样修复: {baseline_guard_stats.get('resample_fixed', 0)}")
+            print(f"    降级模板: {baseline_guard_stats.get('fallback_used', 0)}")
+            print(f"    最终仍异常: {baseline_guard_stats.get('final_abnormal', 0)}")
         all_results["baseline"] = baseline_results
 
     # 保存结果（版本化）
