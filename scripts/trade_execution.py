@@ -57,8 +57,31 @@ def _records_file() -> Path:
     return _logs_dir() / "trade_records.jsonl"
 
 
+def _audit_file() -> Path:
+    return _logs_dir() / "audit_events.jsonl"
+
+
+def _anomaly_file() -> Path:
+    return _logs_dir() / "anomaly_events.jsonl"
+
+
 def _kill_file() -> Path:
     rel = cfg.get("trade_live", {}).get("kill_switch_file", "output/trade_live.KILL")
+    return Path(PROJECT_ROOT) / rel
+
+
+def _manual_override_file() -> Path:
+    rel = cfg.get("trade_live", {}).get("manual_override_file", "output/trade_live.OVERRIDE.json")
+    return Path(PROJECT_ROOT) / rel
+
+
+def _capital_pause_file() -> Path:
+    rel = cfg.get("trade_live", {}).get("capital_pause_file", "output/trade_live.CAPITAL_PAUSE")
+    return Path(PROJECT_ROOT) / rel
+
+
+def _profit_take_file() -> Path:
+    rel = cfg.get("trade_live", {}).get("profit_take_file", "output/trade_live.PROFIT_TAKE.json")
     return Path(PROJECT_ROOT) / rel
 
 
@@ -424,6 +447,16 @@ def _append_trade_records(receipts: List[dict], broker: str, execute: bool) -> N
                 "wth": str(r.get("wth", "")),
             }
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def _append_audit_event(event: dict) -> None:
+    with _audit_file().open("a", encoding="utf-8") as f:
+        f.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+
+def _append_anomaly_event(event: dict) -> None:
+    with _anomaly_file().open("a", encoding="utf-8") as f:
+        f.write(json.dumps(event, ensure_ascii=False) + "\n")
 
 
 def _score_factor(score: float, low: float, high: float, reverse: bool = False) -> float:
@@ -1100,6 +1133,131 @@ def _eastmoney_executor(intents: List[OrderIntent], execute: bool) -> Dict[str, 
     }
 
 
+def _load_manual_override() -> dict:
+    fp = _manual_override_file()
+    if not fp.exists():
+        return {}
+    try:
+        data = json.loads(fp.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _apply_manual_override(intents: List[OrderIntent], current_positions: Dict[str, float]) -> Tuple[List[OrderIntent], Dict[str, str]]:
+    ov = _load_manual_override()
+    if not ov:
+        return intents, {}
+    marks: Dict[str, str] = {}
+    if bool(ov.get("force_block_all", False)):
+        for it in intents:
+            marks[it.symbol] = "manual_override:block_all"
+        return [], marks
+    block_sides = {str(x).lower() for x in (ov.get("block_sides", []) or [])}
+    allow_symbols = {str(x) for x in (ov.get("allow_symbols", []) or [])}
+    force_sell_symbols = {str(x) for x in (ov.get("force_sell_symbols", []) or [])}
+    out: List[OrderIntent] = []
+    for it in intents:
+        if allow_symbols and it.symbol not in allow_symbols:
+            marks[it.symbol] = "manual_override:not_in_allow_symbols"
+            continue
+        if it.side in block_sides:
+            marks[it.symbol] = f"manual_override:block_side:{it.side}"
+            continue
+        out.append(it)
+    existing_sell = {it.symbol for it in out if it.side == "sell"}
+    for sym in sorted(force_sell_symbols):
+        cur = float(current_positions.get(sym, 0.0))
+        if cur <= 0 or sym in existing_sell:
+            continue
+        out.append(
+            OrderIntent(
+                symbol=sym,
+                side="sell",
+                delta_pct=cur,
+                target_pct=0.0,
+                score=0.0,
+                reason="manual_override_force_sell",
+                rank=0,
+            )
+        )
+        marks[sym] = "manual_override:force_sell"
+    out.sort(key=lambda x: (0 if x.side == "sell" else 1, x.rank))
+    return out, marks
+
+
+def _get_broker_total_asset(broker: str) -> float:
+    if broker != "eastmoney_sim":
+        return 0.0
+    api, zjzh, err = _build_eastmoney_api_context()
+    if err:
+        return 0.0
+    try:
+        bal = api.get_balance(zjzh)
+        return _to_float(bal.get("zzc", 0), 0.0)
+    except Exception:
+        return 0.0
+
+
+def _today_buy_amount() -> float:
+    fp = _records_file()
+    if not fp.exists():
+        return 0.0
+    today = datetime.now().strftime("%Y-%m-%d")
+    total = 0.0
+    with fp.open("r", encoding="utf-8", errors="ignore") as f:
+        for ln in f:
+            if not ln.strip():
+                continue
+            try:
+                row = json.loads(ln)
+            except Exception:
+                continue
+            if not str(row.get("timestamp", "")).startswith(today):
+                continue
+            if str(row.get("side", "")).lower() != "buy":
+                continue
+            total += _to_float(row.get("order_amount_cny", 0), 0.0)
+    return total
+
+
+def _detect_anomalies(result: Dict[str, object], broker: str, execute: bool) -> List[str]:
+    rcfg = cfg.get("risk_control", {})
+    recs = result.get("receipts", []) if isinstance(result, dict) else []
+    if not isinstance(recs, list) or not recs:
+        return []
+    anomalies = []
+    single_cap = float(rcfg.get("anomaly_single_order_amount_cny", 120000))
+    daily_buy_cap = float(rcfg.get("anomaly_daily_buy_amount_cny", 300000))
+    fail_ratio_th = float(rcfg.get("anomaly_fail_ratio", 0.6))
+    run_buy = 0.0
+    failed = 0
+    for r in recs:
+        amt = _to_float(r.get("order_amount_cny", 0), 0.0)
+        if amt > single_cap:
+            anomalies.append(f"single_order_amount_exceed:{amt:.2f}>{single_cap:.2f}")
+        if str(r.get("side", "")).lower() == "buy":
+            run_buy += amt
+        if str(r.get("status", "")).lower() == "failed":
+            failed += 1
+    total_buy = _today_buy_amount() + run_buy
+    if total_buy > daily_buy_cap:
+        anomalies.append(f"daily_buy_amount_exceed:{total_buy:.2f}>{daily_buy_cap:.2f}")
+    fail_ratio = failed / max(1, len(recs))
+    if fail_ratio >= fail_ratio_th:
+        anomalies.append(f"fail_ratio_high:{fail_ratio:.2%}>={fail_ratio_th:.2%}")
+    if anomalies:
+        _append_anomaly_event(
+            {
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+                "broker": broker,
+                "execute": execute,
+                "anomalies": anomalies,
+            }
+        )
+    return anomalies
+
+
 def execute_plan(plan: List[dict], execute: bool, broker: str) -> Dict[str, object]:
     if execute and _kill_file().exists():
         return {
@@ -1116,6 +1274,9 @@ def execute_plan(plan: List[dict], execute: bool, broker: str) -> Dict[str, obje
     else:
         current_positions = {}
     intents, risk_marks = build_order_intents(plan, current_positions)
+    # 手动覆盖（P3）：可通过 OVERRIDE 文件临时阻断/放行/强平指定标的。
+    intents, override_marks = _apply_manual_override(intents, current_positions)
+    risk_marks.update(override_marks)
 
     max_daily = int(cfg.get("risk_control", {}).get("max_daily_trades", 5))
     today_n = _daily_trade_count(broker)
@@ -1130,6 +1291,57 @@ def execute_plan(plan: List[dict], execute: bool, broker: str) -> Dict[str, obje
             continue
         setattr(it, "_idem_key", key)
         final_intents.append(it)
+
+    capital_meta = {}
+    # 资金管理（P3）：2A 提示止盈提取，70%A 触发暂停。
+    cm = cfg.get("trade_live", {}).get("capital_management", {})
+    if execute and bool(cm.get("enabled", True)):
+        initial_capital = float(cm.get("initial_capital", 0) or 0)
+        profit_mult = float(cm.get("profit_take_multiple", 2.0) or 2.0)
+        stop_mult = float(cm.get("drawdown_pause_multiple", 0.7) or 0.7)
+        total_asset = _get_broker_total_asset(broker)
+        capital_meta = {
+            "enabled": True,
+            "initial_capital": initial_capital,
+            "total_asset": round(total_asset, 2),
+            "profit_take_line": round(initial_capital * profit_mult, 2) if initial_capital > 0 else 0.0,
+            "pause_line": round(initial_capital * stop_mult, 2) if initial_capital > 0 else 0.0,
+        }
+        if initial_capital > 0 and total_asset > 0:
+            if total_asset <= initial_capital * stop_mult:
+                _capital_pause_file().write_text(
+                    json.dumps(
+                        {
+                            "timestamp": datetime.now().isoformat(timespec="seconds"),
+                            "total_asset": round(total_asset, 2),
+                            "initial_capital": initial_capital,
+                            "rule": f"asset<=A*{stop_mult}",
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                )
+                return {
+                    "blocked": True,
+                    "block_reason": f"capital_pause_triggered:{total_asset:.2f}<={initial_capital * stop_mult:.2f}",
+                    "intents": [],
+                    "receipts": [],
+                    "capital_meta": capital_meta,
+                }
+            if total_asset >= initial_capital * profit_mult:
+                profit_take = {
+                    "timestamp": datetime.now().isoformat(timespec="seconds"),
+                    "total_asset": round(total_asset, 2),
+                    "initial_capital": initial_capital,
+                    "suggest_withdraw_cny": round(max(0.0, total_asset - initial_capital), 2),
+                    "rule": f"asset>=A*{profit_mult}",
+                }
+                _profit_take_file().write_text(json.dumps(profit_take, ensure_ascii=False, indent=2), encoding="utf-8")
+                buy_before = len([x for x in final_intents if x.side == "buy"])
+                final_intents = [x for x in final_intents if x.side != "buy"]
+                if buy_before > 0:
+                    risk_marks["capital_profit_take"] = f"buy_blocked:{buy_before}"
 
     if broker == "eastmoney_sim":
         result = _eastmoney_api_execute(final_intents, execute=execute)
@@ -1160,6 +1372,22 @@ def execute_plan(plan: List[dict], execute: bool, broker: str) -> Dict[str, obje
             elif st == "failed":
                 _append_idem(getattr(it, "_idem_key"), it, "failed", broker=broker, receipt=matched)
 
+    anomalies = _detect_anomalies(result, broker=broker, execute=execute)
+    # 合规审计日志（P3）
+    _append_audit_event(
+        {
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "broker": broker,
+            "execute": execute,
+            "intent_count": len(final_intents),
+            "receipt_count": len(result.get("receipts", []) if isinstance(result, dict) else []),
+            "risk_marks": risk_marks,
+            "anomalies": anomalies,
+            "kill_switch": str(_kill_file()),
+            "manual_override_file": str(_manual_override_file()),
+        }
+    )
+
     result.update(
         {
             "blocked": False,
@@ -1169,6 +1397,9 @@ def execute_plan(plan: List[dict], execute: bool, broker: str) -> Dict[str, obje
             "daily_trade_used_before": today_n,
             "daily_trade_allowed_this_run": allowed_n,
             "kill_switch_file": str(_kill_file()),
+            "manual_override_file": str(_manual_override_file()),
+            "capital_meta": capital_meta,
+            "anomalies": anomalies,
         }
     )
     _append_trade_records(result.get("receipts", []), broker=broker, execute=execute)

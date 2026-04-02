@@ -155,6 +155,9 @@ risk_control:
   # 日度限制
   max_daily_loss_pct: -0.03          # 单日最大亏损（-3%触发暂停）
   max_daily_trades: 20                # 单日最大交易笔数
+  anomaly_single_order_amount_cny: 120000  # 单笔金额异常阈值
+  anomaly_daily_buy_amount_cny: 300000     # 当日买入总额异常阈值
+  anomaly_fail_ratio: 0.60                 # 回执失败率异常阈值
   # 市场环境
   turbulence_threshold: 3.0          # 波动率异常倍数（>3σ自动减仓）
   # 交易成本仿真
@@ -214,6 +217,18 @@ trade_live:
   max_positions: 10                # 精筛后持仓上限
   weekly_min_picks: 3              # 每周最少推送可买入优质股数量
   weekly_max_picks: 10             # 每周最多推送可买入优质股数量
+  vol_target_enabled: true             # 启用目标波动率仓位缩放
+  target_vol_annual: 0.15              # 目标组合年化波动率
+  vol_scale_min: 0.50                  # 波动率缩放下限
+  vol_scale_max: 1.30                  # 波动率缩放上限
+  manual_override_file: output/trade_live.OVERRIDE.json  # 手动覆盖配置（阻断/放行/强平）
+  capital_pause_file: output/trade_live.CAPITAL_PAUSE     # 触发70%A止损暂停标记
+  profit_take_file: output/trade_live.PROFIT_TAKE.json    # 触发2A止盈提取提示
+  capital_management:
+    enabled: true
+    initial_capital: 100000
+    profit_take_multiple: 2.0
+    drawdown_pause_multiple: 0.7
   stock_factor_file: training-data/factors/stock_factors_latest.json  # 基本面/北向资金因子输入
   asym_rebound_confirm_trend_20d: 1.0  # 非对称买入：20日趋势至少转正到该阈值再买
   asym_rebound_rsi_threshold: 42.0      # RSI低于该值视为低位区，触发“先确认后买”

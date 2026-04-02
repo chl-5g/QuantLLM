@@ -52,6 +52,40 @@ def _target_exposure_by_regime_score(score100: float) -> float:
     return round(0.80 + ((s - 70.0) / 30.0) * 0.15, 4)
 
 
+def _apply_vol_target_exposure(base_exposure: float, candidates: List[dict]) -> Tuple[float, dict]:
+    """
+    P3 波动率目标化：按候选池 hv_20 估算实现波动，缩放总仓位。
+    """
+    trade_cfg = cfg.get("trade_live", {})
+    enabled = bool(trade_cfg.get("vol_target_enabled", True))
+    target_vol = float(trade_cfg.get("target_vol_annual", 0.15))
+    scale_min = float(trade_cfg.get("vol_scale_min", 0.5))
+    scale_max = float(trade_cfg.get("vol_scale_max", 1.3))
+    if not enabled:
+        return base_exposure, {"enabled": False}
+    hv_vals = []
+    for c in candidates:
+        hv = float(c.get("hv_20", 0) or 0)
+        if hv > 0:
+            hv_vals.append(hv / 100.0)
+    if not hv_vals:
+        return base_exposure, {"enabled": True, "reason": "no_hv20"}
+    hv_vals.sort()
+    realized_vol = hv_vals[len(hv_vals) // 2]
+    if realized_vol <= 0:
+        return base_exposure, {"enabled": True, "reason": "invalid_realized_vol"}
+    raw_scale = target_vol / realized_vol
+    scale = _clamp(raw_scale, min(scale_min, scale_max), max(scale_min, scale_max))
+    adj = _clamp(base_exposure * scale, 0.0, 1.0)
+    return round(adj, 4), {
+        "enabled": True,
+        "target_vol_annual": round(target_vol, 4),
+        "realized_vol_annual": round(realized_vol, 4),
+        "raw_scale": round(raw_scale, 4),
+        "applied_scale": round(scale, 4),
+    }
+
+
 def _max_positions_by_regime_score(score100: float, max_positions: int) -> int:
     s = _clamp(float(score100), 0.0, 100.0)
     upper = max(1, int(max_positions))
@@ -317,9 +351,10 @@ def _build_execution_plan(
     max_positions: int,
     regime: str,
     regime_score_100: float,
-) -> List[dict]:
+) -> Tuple[List[dict], dict]:
     trade_cfg = cfg.get("trade_live", {})
-    target_exposure = _target_exposure_by_regime_score(regime_score_100)
+    base_exposure = _target_exposure_by_regime_score(regime_score_100)
+    target_exposure, vol_target_meta = _apply_vol_target_exposure(base_exposure, candidates=candidates)
     regime_cap = _max_positions_by_regime_score(regime_score_100, max_positions=max_positions)
     picks = rankings[: max(1, min(max_positions, regime_cap))]
 
@@ -376,7 +411,11 @@ def _build_execution_plan(
                 "regime_score_100": regime_score_100,
             }
         )
-    return plan
+    return plan, {
+        "base_exposure": base_exposure,
+        "final_exposure": target_exposure,
+        "vol_target": vol_target_meta,
+    }
 
 
 def _fallback_rankings(candidates: List[dict], top_n: int) -> List[dict]:
@@ -465,13 +504,14 @@ def main() -> None:
             if not rankings:
                 rankings = _fallback_rankings(candidates, top_n=max_positions)
 
-        raw_plan = _build_execution_plan(
+        raw_plan, exposure_meta = _build_execution_plan(
             rankings,
             candidates=candidates,
             max_positions=max_positions,
             regime=regime,
             regime_score_100=float(stats.get("regime_score_100", 50.0)),
         )
+        stats["exposure_meta"] = exposure_meta
 
     plan = sanitize_plan(raw_plan)
 
