@@ -99,10 +99,10 @@ from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, DATA_DIR, OUTPUT_DIR
 │   ├── rag_serve.py                   #   RAG 增强推理服务
 │   ├── qwen_skills.py                 #   Qwen Skills（结构化精排，JSON 约束）
 │   ├── eastmoney_login.py             #   东方财富模拟盘认证
-│   ├── eastmoney_executor.py          #   Playwright 执行器（买卖提交 + 回执核验）
+│   ├── eastmoney_executor.py          #   （历史）Playwright 执行器，默认链路已停用
 │   ├── eastmoney_keepalive.py         #   模拟盘 session 保活守护
 │   ├── eastmoney_check.py             #   模拟盘凭据验证
-│   ├── trade_execution.py             #   执行核心（风控、幂等、限频、适配器分发）
+│   ├── trade_execution.py             #   执行核心（API直连、风控、幂等、限频、两阶段执行）
 │   ├── trade_live_qwen.py             #   双层实盘入口（规则初筛 -> Qwen 精排 -> 执行）
 │   ├── trade_live_validate.py         #   dry-run / execute / sim 联调验证
 │   └── trade_session_runner.py        #   交易时段自动调度器（含竞价 dry-run 策略）
@@ -281,7 +281,7 @@ from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, DATA_DIR, OUTPUT_DIR
 
 ## 模拟盘交易系统
 
-训练+回测验证后，已接入东方财富模拟盘执行链路，支持 `eastmoney_paper`（本地仓位仿真）与 `eastmoney_sim`（Playwright 页面执行）。
+训练+回测验证后，已接入东方财富模拟盘执行链路，支持 `eastmoney_paper`（本地仓位仿真）与 `eastmoney_sim`（HTTP API 直连执行）。
 
 **两层协作架构（已切换）**：
 
@@ -290,7 +290,7 @@ from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, DATA_DIR, OUTPUT_DIR
                                    ↓
 第2层: Qwen Skills（分钟级）→ StockRankSkill 精筛 + 生成执行计划
                                    ↓
-                trade_execution 风控/幂等/限频 + eastmoney 适配执行 + 交易日志
+                trade_execution 两阶段执行（先持仓处置，再资金驱动买入）+ 风控/幂等/限频 + 交易日志
 ```
 
 **牛熊市环境感知**（5维度融合评分）：
@@ -308,20 +308,23 @@ from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, DATA_DIR, OUTPUT_DIR
 - 总股本 < 20亿股（否则强制扣25分）
 - 底部信号检测（RSI<35 / MA偏离<-10% / 距52周低点<15% / MACD底背离）
 
-## 当前进展（2026-03-30）
+## 当前进展（2026-04-02）
 
 - 默认微调模型路径已切换到 `output/quant-qwen2.5-14b-v4-trapboost`（`config.yaml`）。
 - 门禁链路已跑完：`holdout + 核心题 + 对抗题 + 评分方向复核`，评分方向专项 `6/6` 通过。
 - `qwen_skills.py` 已增加稳健 JSON 提取（仅解析首个 JSON 对象），并支持实盘场景短超时/快速回退配置。
-- `trade_execution.py` 已接入执行层风控：单票/总仓位上限、日内限频、幂等、kill switch、失败回滚队列。
-- `eastmoney_executor.py` 已接入 Playwright 提交逻辑：下单按钮可用性判断、提交后回执核验、失败原因落盘。
-- `trade_live_validate.py` 可一键验证 `dry-run + execute(paper) + execute(sim)` 三段链路一致性。
-- 新增 `trade_session_runner.py`，支持交易时段自动调度：
+- `trade_execution.py` 已切换为 **API 直连执行**：默认不再依赖 Playwright，支持持仓先卖后买、当日未完成委托去重、账户强制绑定（`trade_live.eastmoney_zjzh`）。
+- 当前执行账户已固定为 `模拟组合6880882`（`zjzh=260680400000080882`），避免多模拟账户串单。
+- 下单逻辑已改为 **score 驱动仓位/金额**：高分买入更大、低分卖出更多；叠加 `max_buy/max_sell`、可用资金和 100 股手数约束。
+- 行情取价改为严格模式：优先实时行情 API；取价失败直接 `quote_api_unavailable` 跳过，不再用固定价格盲目报单。
+- `trade_live_validate.py` 可验证 `dry-run + execute(paper) + execute(sim)` 三段链路一致性（sim 为 API 直连）。
+- `trade_session_runner.py` 支持交易时段自动调度，并在归档日志文件名中追加 `股票代码_股票名` 标识：
   - `09:15-09:25` 仅 `dry-run`（集合竞价预热）
   - `09:30-11:30`、`13:00-15:00` 执行 `--execute`
   - 全量策略日志与交易日志可输出到 `Desktop/stock`
+- 新增统一交易明细：`output/trade_logs/trade_records.jsonl`，每条记录包含 `股票代码/股票名/买卖方向/价格/数量/金额/委托号/交易时间/状态/原因`。
 
-> 说明：若东方财富页面下单按钮处于禁用状态（常见于非交易时段），系统会返回 `submit_button_disabled` 并阻断提交，不会盲目报单。
+> 说明：非交易时段 API 可能返回“当前时间不可交易”，系统会落盘失败原因并阻断后续重复报单；不会在同一标的同方向上重复堆积未完成委托。
 
 ## 技术栈
 
@@ -333,7 +336,7 @@ from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, DATA_DIR, OUTPUT_DIR
 - **训练数据**: 模板化规则引擎 + 预测性标签（实际收益） + 本地大模型辅助
 - **回测系统**: 走步验证，T+1约束，对比沪深300基准
 - **RAG**: FAISS + bge-large-zh-v1.5
-- **模拟盘**: 东方财富 Playwright 执行器 + Qwen Skills 精排 + 交易时段自动调度器
+- **模拟盘**: 东方财富 HTTP API 直连执行 + Qwen Skills 精排 + 交易时段自动调度器（Playwright 默认停用）
 
 ## 免责声明
 
