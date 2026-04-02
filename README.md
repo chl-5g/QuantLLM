@@ -416,8 +416,8 @@ from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, DATA_DIR, OUTPUT_DIR
 - [x] **修复 sell action 被吞** — `sanitize_plan` 只允许 buy/hold，sell 被强制改为 hold（2026-04-02 已修复）
 - [x] **优化幂等 key** — 简化为 `(日期|broker|symbol|side)`，不含 delta/target 避免微变绕过；区分 accepted/failed 状态，failed 允许有限重试（默认3次）（2026-04-02 已修复）
 - [ ] **模拟盘实跑验证** — 目标：跑赢沪深300至少3个月（从2026-04-03开始计）
-- [ ] **观察 Qwen Skills 精排效果** — 确认精排生效，评估精排 vs 规则评分的实际差异
-- [ ] **验证两阶段执行(先卖后买)** — 确认卖出后资金释放、买入金额计算正确
+- [x] **观察 Qwen Skills 精排效果** — 已完成（2026-04-02）：修复 qwen_skills.py JSON 容错后，trade_live_qwen.py dry-run 不再触发 schema fallback，精排结果可稳定产出
+- [x] **验证两阶段执行(先卖后买)** — 已完成（2026-04-02）：执行链路确认先拆分 sell_intents 再处理 buy_intents，实测 execute 模式回执正常落盘（样本：output/trade_logs/trade_20260402_205026.json）
 
 ### P1 — 策略架构优化
 
