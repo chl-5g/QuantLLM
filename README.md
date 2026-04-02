@@ -414,20 +414,27 @@ from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, DATA_DIR, OUTPUT_DIR
 
 ## TODO — 策略优化路线
 
-> 每周维护更新，上次更新：2026-04-02
+> 每周维护更新，上次更新：2026-04-03
 
-### P0 — 验证与修复（当前阶段，仅未完成）
+### P0 — 验证与修复（当前阶段）
 
 - [ ] **模拟盘实跑验证** — 目标：跑赢沪深300至少3个月（从2026-04-03开始计）
-### P3 — 实盘准备（仅未完成）
+- [ ] **节假日 API 替换** — timor.tech 已返回 403，当前靠 weekday fallback，遇调休日（周六上班/周五放假）会误判。替换为 `chinese_calendar` 库或其他可靠数据源
+- [ ] **config.yaml broker 统一** — `trade_live.broker` 写的是 `eastmoney_paper`，runner 实际用 `--broker eastmoney_sim`，应统一为 `eastmoney_sim` 避免混淆
+
+### P1 — 因子数据补齐（影响评分质量）
+
+- [ ] **基本面因子生产链** — `training-data/factors/stock_factors_latest.json` 文件不存在，PE/PB/ROE/北向资金因子全为0，评分完全依赖技术面。需建立采集→清洗→落盘→质量校验流程（akshare 可获取）
+- [ ] **因子数据定时更新** — 因子文件需每日/每周更新，纳入 cron 或 systemd timer
+
+### P3 — 实盘准备
 
 - [ ] **实盘切换** — 模拟盘跑赢沪深300三个月后，换支持 QMT 的券商（国金/华鑫）
 
-### P4 — 工程化与稳定性（新增）
+### P4 — 工程化与稳定性
 
 - [ ] **接入 P2/P3 定时任务编排** — 将日报/监控/对账/回测实盘对比纳入统一调度（cron/systemd），不再依赖手工触发
 - [ ] **run.sh 增补新命令入口** — 增加 dpo-build / daily-report / monitor / reconcile / compare 子命令，统一运维入口
-- [ ] **因子数据生产链补齐** — 建立 `stock_factors_latest.json` 的采集、清洗、落盘、质量校验流程，确保基本面/北向因子持续生效
 - [ ] **监控告警通道实装** — webhook 告警补齐分级、重试、静默窗口和去重，减少噪音并避免漏报
 - [ ] **手动覆盖机制加 schema 校验** — 对 `trade_live.OVERRIDE.json` 做 JSON Schema 校验与启动前检查，防误配
 - [ ] **审计/异常日志轮转归档** — 为 `audit_events.jsonl`/`anomaly_events.jsonl`/`trade_records.jsonl` 增加留存周期与压缩归档
