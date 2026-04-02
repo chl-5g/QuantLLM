@@ -235,7 +235,7 @@ trade_live:
   asym_sell_min_fraction: 0.30          # 非对称卖出：单轮最少卖出比例
   asym_sell_max_fraction: 0.65          # 非对称卖出：单轮最多卖出比例
   enable_real_orders: true        # 允许真实下单（仍需 trade_live_qwen.py --execute）
-  broker: eastmoney_paper            # eastmoney_paper/eastmoney_sim
+  broker: eastmoney_sim              # eastmoney_paper/eastmoney_sim（与 runner 默认保持一致）
   min_rebalance_delta: 0.01          # 调仓最小变动阈值(1%)
   kill_switch_file: output/trade_live.KILL  # 存在即阻断 execute
   log_dir: output/trade_logs

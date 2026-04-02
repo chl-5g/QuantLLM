@@ -6,6 +6,7 @@ akshare>=1.18
 pandas>=2.0
 numpy>=2.0
 openpyxl>=3.1
+chinese-calendar>=1.9
 
 # 模型训练
 torch>=2.6
@@ -19,6 +20,7 @@ accelerate>=1.13
 
 # 数据增强（可选，需要 ollama）
 requests>=2.32
+python-docx>=1.1
 
 # 评估（可选）
 # rouge-score>=0.1

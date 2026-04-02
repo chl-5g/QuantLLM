@@ -16,8 +16,12 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
-from urllib import request as urlrequest
 from zoneinfo import ZoneInfo
+
+try:
+    from chinese_calendar import is_workday as _cc_is_workday
+except Exception:  # optional dependency fallback
+    _cc_is_workday = None
 
 
 BJ_TZ = ZoneInfo("Asia/Shanghai")
@@ -87,24 +91,28 @@ def _session_mode(now_bj: datetime) -> str:
 
 def _is_cn_workday(now_bj: datetime) -> bool:
     """
-    优先调用公共节假日API判断“是否工作日”。
-    若查询失败，回退为周一到周五。
+    优先使用 chinese_calendar（支持中国法定节假日与调休）。
+    若依赖不可用，回退为周一到周五。
     """
-    date_str = now_bj.strftime("%Y-%m-%d")
-    url = f"https://timor.tech/api/holiday/info/{date_str}"
+    if _cc_is_workday is not None:
+        try:
+            return bool(_cc_is_workday(now_bj.date()))
+        except Exception:
+            pass
+    # 兜底：若当前解释器未安装 chinese_calendar，尝试调用项目 venv。
     try:
-        with urlrequest.urlopen(url, timeout=3) as resp:
-            raw = resp.read().decode("utf-8", errors="ignore")
-        data = json.loads(raw)
-        # 兼容不同返回结构
-        t = data.get("type", {}) if isinstance(data, dict) else {}
-        t_code = t.get("type") if isinstance(t, dict) else None
-        if t_code is not None:
-            # 0=工作日, 1=周末, 2=节假日（含调休）
-            return int(t_code) == 0
-        holiday = data.get("holiday", {}) if isinstance(data, dict) else {}
-        if isinstance(holiday, dict) and "holiday" in holiday:
-            return not bool(holiday.get("holiday"))
+        cmd = [
+            "/opt/quant-llm/finetune-env/bin/python3",
+            "-c",
+            (
+                "import datetime as d; "
+                "from chinese_calendar import is_workday; "
+                f"print('1' if is_workday(d.date({now_bj.year},{now_bj.month},{now_bj.day})) else '0')"
+            ),
+        ]
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=2)
+        if p.returncode == 0 and p.stdout.strip() in {"0", "1"}:
+            return p.stdout.strip() == "1"
     except Exception:
         pass
     return now_bj.weekday() < 5

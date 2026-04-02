@@ -11,6 +11,7 @@
 #   convert    — 仅数据转换
 #   predict    — 生成预测性训练数据（实际收益标签）
 #   generate   — 数据增强（FinGPT+量化计算+推理链）
+#   factors    — 生成个股因子文件（PE/PB/ROE/北向5日）
 #   merge      — 仅合并训练集
 #   train      — 仅训练
 #   export     — 导出 GGUF
@@ -113,6 +114,15 @@ step_generate() {
     fi
 
     log "数据增强完成"
+}
+
+# ============================================================
+# Step 2.6: 因子数据构建（基本面+北向）
+# ============================================================
+step_factors() {
+    log "========== Step 2.6: 因子数据构建 =========="
+    python3 "$SCRIPTS_DIR/build_stock_factors.py" --max-symbols 1200 --roe-limit 260
+    log "因子文件生成完成: $DATA_DIR/factors/stock_factors_latest.json"
 }
 
 # ============================================================
@@ -230,6 +240,9 @@ case "$STEP" in
     generate)
         step_generate
         ;;
+    factors)
+        step_factors
+        ;;
     merge)
         step_merge
         ;;
@@ -257,6 +270,7 @@ case "$STEP" in
         step_crawl
         step_convert
         step_generate
+        step_factors
         step_merge
         step_train
         ;;
@@ -270,7 +284,7 @@ case "$STEP" in
         python3 "$SCRIPTS_DIR/rag_serve.py"
         ;;
     *)
-        echo "用法: bash run.sh [crawl|recalc|fund-flow|convert|predict|generate|merge|train|export|eval|backtest|trade-live|rag-build|rag-serve|all]"
+        echo "用法: bash run.sh [crawl|recalc|fund-flow|convert|predict|generate|factors|merge|train|export|eval|backtest|trade-live|rag-build|rag-serve|all]"
         echo ""
         echo "  crawl      数据采集（A股+期货+ETF+可转债）"
         echo "  recalc     重算技术指标（从basic重算，不爬取）"
@@ -278,6 +292,7 @@ case "$STEP" in
         echo "  convert    行情数据 → 训练问答对"
         echo "  predict    生成预测性训练数据（实际收益标签）"
         echo "  generate   数据增强（FinGPT+量化计算+推理链）"
+        echo "  factors    构建个股因子文件（PE/PB/ROE/北向5日）"
         echo "  merge      合并所有数据源 → 最终训练集"
         echo "  train      QLoRA 微调训练"
         echo "  export     导出 GGUF 格式"

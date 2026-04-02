@@ -134,6 +134,8 @@ def _load_stock_factor_map() -> Dict[str, dict]:
     except Exception:
         return {}
     out: Dict[str, dict] = {}
+    if isinstance(data, dict) and isinstance(data.get("factors"), dict):
+        data = data.get("factors", {})
     if isinstance(data, dict):
         for k, v in data.items():
             sym = _normalize_symbol(str(k))
