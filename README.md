@@ -405,52 +405,36 @@ from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, DATA_DIR, OUTPUT_DIR
 - 修复幂等去重（failed 订单也记录，防止反复重试）
 - 修复 `sanitize_plan` 支持 sell/strong_sell action
 
+### 已完成里程碑（原 TODO 完成项汇总）
+
+- P0：修复 Qwen fallback、幂等去重、sell action 吞单；完成两阶段执行链路与 Qwen 精排效果验证
+- P1：完成信号层/执行层分离、Regime 连续化、非对称买卖、熊市 strong_buy 限制、止盈止损优化、每周 3-10 优质股清单、基本面/北向因子、涨跌停处理、T+1 强化
+- P2：完成 GGUF 导出、DPO 偏好对生成、日报生成、监控告警、策略-持仓对账、回测与实盘收益对比
+- P3（除实盘切换）：完成资金管理（2A 提示止盈、70%A 暂停）、合规审计与异常检测、波动率目标化仓位调节
+
 ## TODO — 策略优化路线
 
 > 每周维护更新，上次更新：2026-04-02
 
-### P0 — 验证与修复（当前阶段）
+### P0 — 验证与修复（当前阶段，仅未完成）
 
-- [x] **修复 Qwen Skills fallback** — `_extract_json` 解析错误导致精排全部回退到规则引擎（2026-04-02 已修复）
-- [x] **修复幂等去重** — failed 订单不记录导致同一标的反复重试47次（2026-04-02 已修复）
-- [x] **修复 sell action 被吞** — `sanitize_plan` 只允许 buy/hold，sell 被强制改为 hold（2026-04-02 已修复）
-- [x] **优化幂等 key** — 简化为 `(日期|broker|symbol|side)`，不含 delta/target 避免微变绕过；区分 accepted/failed 状态，failed 允许有限重试（默认3次）（2026-04-02 已修复）
 - [ ] **模拟盘实跑验证** — 目标：跑赢沪深300至少3个月（从2026-04-03开始计）
-- [x] **观察 Qwen Skills 精排效果** — 已完成（2026-04-02）：修复 qwen_skills.py JSON 容错后，trade_live_qwen.py dry-run 不再触发 schema fallback，精排结果可稳定产出
-- [x] **验证两阶段执行(先卖后买)** — 已完成（2026-04-02）：执行链路确认先拆分 sell_intents 再处理 buy_intents，实测 execute 模式回执正常落盘（样本：output/trade_logs/trade_20260402_205026.json）
-
-### P1 — 策略架构优化
-
-- [x] **信号层与执行层分离（核心）** — 已完成（2026-04-02）：新增日计划缓存机制；预热阶段生成 signal_plan_YYYYMMDD.json，盘中轮询只读取该计划执行，不再每5分钟重算信号
-- [x] **Regime 评分连续化 (0-100)** — 已完成（2026-04-02）：新增连续化 regime_score_100（由 detect_regime 原始分值映射），仓位与持仓上限按连续分值分段插值，不再只依赖三档离散标签
-  - 0-30 极端熊市（仅 strong_buy，仓位 ≤20%）
-  - 30-50 温和熊市/震荡偏空（buy + strong_buy，仓位 30-50%）
-  - 50-70 震荡/温和牛市（正常持仓 50-70%）
-  - 70-100 强牛市（高仓位 80-95%）
-- [x] **非对称买卖策略** — 已完成（2026-04-02）：买入侧新增“回升确认”门槛（低位/弱市需满足 trend_20d 门槛后才转买入）；卖出侧改为分批减仓（单轮卖出比例 30%-65%）
-- [x] **熊市只买 strong_buy** — 已完成（2026-04-02）：熊市/低分 regime 下仅 strong_buy 参与仓位分配，buy 目标仓位自动归零
-- [x] **止盈止损优化** — 已完成（2026-04-02）：单票止损默认放宽到 -12%，并新增移动止盈（浮盈达到12%后按最高价回撤6%触发止盈）
-- [x] **每周模型推送 3-10 支优质可买入股票** — 已完成（2026-04-02）：`--signal-only` 生成日计划时同步产出周度清单 `weekly_buylist_YYYYWww.json`，优先 LLM 的 buy/strong_buy，不足时用规则高分候选补齐
-- [x] **基本面因子叠加** — 已完成（2026-04-02）：支持从 `training-data/factors/stock_factors_latest.json` 读取 PE/PB/ROE，对价值陷阱（PE/PB/ROE异常）降分，基本面稳健标的加分
-- [x] **北向资金因子** — 已完成（2026-04-02）：支持读取 `northbound_net_5d` 因子并叠加到选股评分（净流入加分、净流出减分）；缺数据时自动降级为技术面
-- [x] **涨跌停处理** — 已完成（2026-04-02）：执行层接入实时涨跌停价（f51/f52），涨停买单与跌停卖单自动跳过并落盘原因（limit_up_locked / limit_down_locked）
-- [x] **T+1 约束强化** — 已完成（2026-04-02）：执行层新增当日买入标的卖出拦截，命中后回执 reason=t1_same_day_buy_block
-
-### P2 — 系统完善
-
-- [x] **GGUF 导出** — 已完成（2026-04-02）：重构 `scripts/export_gguf.py` 支持参数化导出（checkpoint/out-dir/quant），可直接用于 Ollama 模型打包
-- [x] **DPO 偏好优化** — 已完成（2026-04-02）：新增 `scripts/dpo_build_pairs.py`，从交易日志自动构建偏好对数据 `output/dpo_pairs_live.jsonl`
-- [x] **日报生成** — 已完成（2026-04-02）：新增 `scripts/generate_daily_report.py`，生成 `docs/daily_reports/*.md` 与 `*.docx`，支持复制到桌面目录
-- [x] **监控告警** — 已完成（2026-04-02）：新增 `scripts/monitor_alerts.py`，支持空闲超时/连续失败检测与 webhook 告警
-- [x] **策略-持仓对账** — 已完成（2026-04-02）：新增 `scripts/reconcile_positions.py`，自动比对策略状态与东方财富持仓并输出差异报告
-- [x] **回测与实盘收益对比** — 已完成（2026-04-02）：新增 `scripts/compare_backtest_live.py`，记录账户净值快照并生成回测/实盘对比文件
-
-### P3 — 实盘准备
+### P3 — 实盘准备（仅未完成）
 
 - [ ] **实盘切换** — 模拟盘跑赢沪深300三个月后，换支持 QMT 的券商（国金/华鑫）
-- [ ] **资金管理** — 初始资金 A，2A 止盈提取利润，70%A 止损暂停
-- [ ] **合规与风控** — 交易审计日志、异常交易检测、手动覆盖机制
-- [ ] **波动率目标化** — 按组合目标波动率（如年化15%）动态调节总仓位，替代固定仓位比例
+
+### P4 — 工程化与稳定性（新增）
+
+- [ ] **接入 P2/P3 定时任务编排** — 将日报/监控/对账/回测实盘对比纳入统一调度（cron/systemd），不再依赖手工触发
+- [ ] **run.sh 增补新命令入口** — 增加 dpo-build / daily-report / monitor / reconcile / compare 子命令，统一运维入口
+- [ ] **因子数据生产链补齐** — 建立 `stock_factors_latest.json` 的采集、清洗、落盘、质量校验流程，确保基本面/北向因子持续生效
+- [ ] **监控告警通道实装** — webhook 告警补齐分级、重试、静默窗口和去重，减少噪音并避免漏报
+- [ ] **手动覆盖机制加 schema 校验** — 对 `trade_live.OVERRIDE.json` 做 JSON Schema 校验与启动前检查，防误配
+- [ ] **审计/异常日志轮转归档** — 为 `audit_events.jsonl`/`anomaly_events.jsonl`/`trade_records.jsonl` 增加留存周期与压缩归档
+- [ ] **回测-实盘对比升级为滚动看板** — 增加 7/30/90 天滚动收益、回撤、胜率、超额收益指标
+- [ ] **新增最小测试集 + CI** — 建立关键路径单元测试并接入 GitHub Actions（计划生成、幂等、风控阻断、override）
+- [ ] **运维脚本去硬编码网络配置** — 移除 `watch_training.sh` 等脚本中的硬编码代理地址，改为配置/环境变量
+- [ ] **交易凭据安全治理** — 明确 Cookie 凭据过期检测、自动刷新、权限最小化和审计策略
 
 ## 技术栈
 
