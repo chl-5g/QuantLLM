@@ -264,7 +264,7 @@ from _config import cfg, MODEL_NAME, MAX_SEQ_LENGTH, DATA_DIR, OUTPUT_DIR
 
 **输出指标**：年化收益、夏普比率、最大回撤、胜率、盈亏比、Calmar比率、超额收益、信息比率
 
-### RAG 检索增强
+### Step 6: RAG 检索增强
 
 ```
 用户查询 → bge-large-zh-v1.5 编码 → FAISS 检索 top-3 → 注入 system prompt → ollama 推理
