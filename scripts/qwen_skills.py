@@ -22,7 +22,7 @@ STOCK_RANK_SYSTEM = """你是专业量化分析师。根据市场环境和候选
 2. 牛市偏趋势跟随，熊市/震荡偏困境反转和防御
 3. 关注多因子共振：RSI超卖+布林下轨+量能萎缩=强反转信号
 4. 只输出一个JSON对象，格式：{{"rankings": [...]}}
-5. 每个元素：rank(int), symbol(str), score(number), action("strong_buy"/"buy"/"hold"/"sell"/"strong_sell"), reason(str), risk_factors(list[str])"""
+5. 每个元素：rank(int), symbol(str), score(number), action("strong_buy"/"buy"/"hold"), reason(str), risk_factors(list[str])"""
 
 STOCK_RANK_OUTPUT_SCHEMA = {
     "type": "object",
@@ -38,7 +38,7 @@ STOCK_RANK_OUTPUT_SCHEMA = {
                     "rank": {"type": "integer", "minimum": 1},
                     "symbol": {"type": "string"},
                     "score": {"type": "number"},
-                    "action": {"enum": ["strong_buy", "buy", "hold", "sell", "strong_sell"]},
+                    "action": {"enum": ["strong_buy", "buy", "hold"]},
                     "reason": {"type": "string"},
                     "risk_factors": {"type": "array", "items": {"type": "string"}},
                 },
@@ -49,7 +49,7 @@ STOCK_RANK_OUTPUT_SCHEMA = {
 
 
 def _extract_json(text):
-    """提取 JSON 对象：优先完整解析，回退到截断尾部后重试。"""
+    """只提取首个完整 JSON 对象，忽略尾部污染字符块。"""
     text = (text or "").strip()
     if not text:
         raise json.JSONDecodeError("empty", text, 0)
@@ -62,26 +62,9 @@ def _extract_json(text):
     if m:
         text = m.group(1).strip()
 
-    # 优先尝试完整 json.loads（处理 prefill 拼接后的完整 JSON）
-    try:
-        obj = json.loads(text)
-        if isinstance(obj, dict):
-            return obj
-    except json.JSONDecodeError:
-        pass
-
-    # 回退：截断尾部垃圾后重试（找最后一个 ]} 闭合）
-    idx = text.rfind("]}")
-    if idx > 0:
-        try:
-            obj = json.loads(text[:idx + 2])
-            if isinstance(obj, dict):
-                return obj
-        except json.JSONDecodeError:
-            pass
-
-    # 最终回退：raw_decode 从首个 '{' 开始
     decoder = json.JSONDecoder()
+
+    # 从首个 '{' 开始尝试 raw_decode，只保留第一个完整对象
     starts = [i for i, ch in enumerate(text) if ch == "{"]
     for s in starts:
         try:
@@ -91,6 +74,43 @@ def _extract_json(text):
         except Exception:
             continue
     raise json.JSONDecodeError("No JSON object found", text, 0)
+
+
+def _is_ranking_item(obj):
+    if not isinstance(obj, dict):
+        return False
+    required = {"rank", "symbol", "score", "action", "reason"}
+    return required.issubset(set(obj.keys()))
+
+
+def _extract_ranking_items(text, max_items=200):
+    """
+    容错解析：当模型没有返回完整 {"rankings":[...]} 包装时，
+    直接从文本里抓取一组 ranking 对象。
+    """
+    src = (text or "").strip()
+    if not src:
+        return []
+    src = re.sub(r"</?think>", "", src, flags=re.IGNORECASE).strip()
+    m = re.search(r"```(?:json)?\s*(.*?)\s*```", src, re.DOTALL | re.IGNORECASE)
+    if m:
+        src = m.group(1).strip()
+
+    items = []
+    decoder = json.JSONDecoder()
+    idx = 0
+    while idx < len(src) and len(items) < max_items:
+        start = src.find("{", idx)
+        if start == -1:
+            break
+        try:
+            obj, consumed = decoder.raw_decode(src[start:])
+            if _is_ranking_item(obj):
+                items.append(obj)
+            idx = start + max(consumed, 1)
+        except Exception:
+            idx = start + 1
+    return items
 
 
 def call_skill_stock_rank(market_regime, candidates, top_n=None):
@@ -148,9 +168,20 @@ def call_skill_stock_rank(market_regime, candidates, top_n=None):
         full_json = '{"rankings": [' + raw
         try:
             data = _extract_json(full_json)
-            jsonschema.validate(data, STOCK_RANK_OUTPUT_SCHEMA)
-            data["rankings"] = data["rankings"][:top_n]
-            return data["rankings"]
+            if isinstance(data, dict) and "rankings" in data:
+                jsonschema.validate(data, STOCK_RANK_OUTPUT_SCHEMA)
+                data["rankings"] = data["rankings"][:top_n]
+                return data["rankings"]
+
+            # 常见异常：模型直接输出 ranking item 序列，缺少 {"rankings": ...} 包装
+            rescued = _extract_ranking_items(raw)
+            if not rescued and _is_ranking_item(data):
+                rescued = [data]
+            if rescued:
+                wrapped = {"rankings": rescued[:top_n]}
+                jsonschema.validate(wrapped, STOCK_RANK_OUTPUT_SCHEMA)
+                return wrapped["rankings"]
+            raise jsonschema.ValidationError("no usable rankings payload")
         except (json.JSONDecodeError, jsonschema.ValidationError) as e:
             print(f"  [SKILL] 输出校验失败 (attempt {attempt+1}): {e}")
             continue

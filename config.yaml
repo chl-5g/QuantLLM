@@ -146,9 +146,12 @@ risk_control:
   max_position_pct: 0.10              # 单票最大仓位占总资产比例
   max_total_position_pct: 0.80        # 总仓位上限
   # 止损/止盈
-  stop_loss_pct: -0.05               # 单票止损线（-5%）
+  stop_loss_pct: -0.12               # 单票止损线（默认-12%，反转策略避免过早止损）
   portfolio_stop_loss_pct: -0.30     # 组合止损线（亏30%清仓暂停，即70%A）
   take_profit_target: 2.0            # 目标净值倍数（翻倍止盈，提取利润）
+  trailing_take_profit: true         # 启用移动止盈（回撤触发）
+  trailing_activation_pct: 0.12      # 浮盈达到12%后开始跟踪止盈
+  trailing_drawdown_pct: 0.06        # 从最高价回撤6%触发止盈
   # 日度限制
   max_daily_loss_pct: -0.03          # 单日最大亏损（-3%触发暂停）
   max_daily_trades: 20                # 单日最大交易笔数
@@ -209,6 +212,13 @@ trade_live:
   max_universe: 1200               # 每次扫描股票数量上限
   prefilter_top_k: 50              # 规则引擎初筛保留数量
   max_positions: 10                # 精筛后持仓上限
+  weekly_min_picks: 3              # 每周最少推送可买入优质股数量
+  weekly_max_picks: 10             # 每周最多推送可买入优质股数量
+  stock_factor_file: training-data/factors/stock_factors_latest.json  # 基本面/北向资金因子输入
+  asym_rebound_confirm_trend_20d: 1.0  # 非对称买入：20日趋势至少转正到该阈值再买
+  asym_rebound_rsi_threshold: 42.0      # RSI低于该值视为低位区，触发“先确认后买”
+  asym_sell_min_fraction: 0.30          # 非对称卖出：单轮最少卖出比例
+  asym_sell_max_fraction: 0.65          # 非对称卖出：单轮最多卖出比例
   enable_real_orders: true        # 允许真实下单（仍需 trade_live_qwen.py --execute）
   broker: eastmoney_paper            # eastmoney_paper/eastmoney_sim
   min_rebalance_delta: 0.01          # 调仓最小变动阈值(1%)

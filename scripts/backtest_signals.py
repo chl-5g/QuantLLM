@@ -555,7 +555,7 @@ def compute_score(row, all_rows, current_idx, prev_row=None, is_etf=False,
 # ============================================================
 
 class Position:
-    __slots__ = ("symbol", "shares", "cost", "buy_date", "buy_price")
+    __slots__ = ("symbol", "shares", "cost", "buy_date", "buy_price", "highest_price")
 
     def __init__(self, symbol, shares, cost, buy_date, buy_price):
         self.symbol = symbol
@@ -563,6 +563,7 @@ class Position:
         self.cost = cost          # 总成本（含手续费）
         self.buy_date = buy_date
         self.buy_price = buy_price
+        self.highest_price = buy_price
 
 
 class Portfolio:
@@ -586,6 +587,9 @@ class Portfolio:
         self.max_total_pct = bt_cfg.get("max_total_pct", 0.80)
         self.stop_loss_pct = bt_cfg.get("stop_loss_pct", -0.05)
         self.portfolio_stop_loss_pct = bt_cfg.get("portfolio_stop_loss_pct", -0.30)
+        self.trailing_take_profit = bool(bt_cfg.get("trailing_take_profit", True))
+        self.trailing_activation_pct = bt_cfg.get("trailing_activation_pct", 0.12)
+        self.trailing_drawdown_pct = bt_cfg.get("trailing_drawdown_pct", 0.06)
         self.max_daily_trades = bt_cfg.get("max_daily_trades", 5)
         self.max_positions = bt_cfg.get("max_positions", 10)
 
@@ -732,7 +736,14 @@ class Portfolio:
             hold_days = (datetime.strptime(date, "%Y-%m-%d") -
                          datetime.strptime(pos.buy_date, "%Y-%m-%d")).days
             price = prices.get(sym, pos.buy_price)
+            pos.highest_price = max(float(pos.highest_price), float(price))
             pnl_pct = (price - pos.buy_price) / pos.buy_price
+            # 移动止盈：达到激活收益后，若从最高价回撤超过阈值则止盈离场
+            if self.trailing_take_profit and pos.highest_price > 0:
+                peak_drawdown_pct = (price - pos.highest_price) / pos.highest_price
+                if pnl_pct >= self.trailing_activation_pct and peak_drawdown_pct <= -abs(self.trailing_drawdown_pct):
+                    self.sell(sym, price, date, reason="trailing_take_profit")
+                    continue
             if hold_days < min_hold:
                 # 保护期内只有跌幅超过30%才强制止损（极端情况）
                 if pnl_pct <= -0.30:
@@ -886,6 +897,9 @@ def run_stock_strategy(symbol_data, date_index, bt_cfg, regime_source=None):
         "max_total_pct": risk_cfg.get("max_total_position_pct", 0.80),
         "stop_loss_pct": risk_cfg.get("stop_loss_pct", -0.20),  # 反转策略需要更大容忍度
         "portfolio_stop_loss_pct": risk_cfg.get("portfolio_stop_loss_pct", -0.30),
+        "trailing_take_profit": risk_cfg.get("trailing_take_profit", True),
+        "trailing_activation_pct": risk_cfg.get("trailing_activation_pct", 0.12),
+        "trailing_drawdown_pct": risk_cfg.get("trailing_drawdown_pct", 0.06),
         "cooldown_days": 60,  # 组合止损后冷却60天再恢复
         "min_hold_days": 5,   # 持仓保护期
         "max_daily_trades": risk_cfg.get("max_daily_trades", 5),

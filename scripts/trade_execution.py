@@ -440,7 +440,20 @@ def _score_factor(score: float, low: float, high: float, reverse: bool = False) 
     return 0.6 + 0.8 * base
 
 
-def _fetch_realtime_price(code: str, fallback_price: str) -> Tuple[str, str, bool]:
+def _asym_sell_factor(score: float, low: float, high: float) -> float:
+    """
+    非对称卖出：高位分批卖，避免一次性清仓。
+    将 score 因子映射到 [min_frac, max_frac]，默认约 [0.30, 0.65]。
+    """
+    tcfg = cfg.get("trade_live", {})
+    min_frac = max(0.05, min(1.0, float(tcfg.get("asym_sell_min_fraction", 0.30))))
+    max_frac = max(min_frac, min(1.0, float(tcfg.get("asym_sell_max_fraction", 0.65))))
+    raw = _score_factor(score, low, high, reverse=True)  # raw in [0.6, 1.4]
+    norm = max(0.0, min(1.0, (raw - 0.6) / 0.8))
+    return min_frac + norm * (max_frac - min_frac)
+
+
+def _fetch_realtime_quote(code: str, fallback_price: str) -> Dict[str, object]:
     secid = ("1." + code) if str(code).startswith(("6", "9")) else ("0." + code)
     sources = [
         ("eastmoney_push2", "https://push2.eastmoney.com/api/qt/stock/get"),
@@ -453,19 +466,39 @@ def _fetch_realtime_price(code: str, fallback_price: str) -> Tuple[str, str, boo
             try:
                 r = s.get(
                     source_url,
-                    params={"secid": secid, "fields": "f43"},
+                    params={"secid": secid, "fields": "f43,f51,f52"},
                     timeout=8,
                 )
                 data = r.json().get("data", {}) if r.status_code == 200 else {}
                 f43 = _to_float(data.get("f43", 0), 0.0)
                 if f43 > 0:
-                    return f"{(f43 / 100.0):.2f}", source_name, True
+                    px = round(f43 / 100.0, 2)
+                    up = round(_to_float(data.get("f51", 0), 0.0) / 100.0, 2)
+                    down = round(_to_float(data.get("f52", 0), 0.0) / 100.0, 2)
+                    return {
+                        "price": f"{px:.2f}",
+                        "price_source": source_name,
+                        "ok": True,
+                        "limit_up": up if up > 0 else 0.0,
+                        "limit_down": down if down > 0 else 0.0,
+                    }
             except Exception:
                 if i < 1:
                     time.sleep(0.25 * (i + 1))
                 continue
     # 不再使用本地收盘价回退，避免“看起来像实时价但其实不是”。
-    return str(fallback_price), "fallback_default", False
+    return {
+        "price": str(fallback_price),
+        "price_source": "fallback_default",
+        "ok": False,
+        "limit_up": 0.0,
+        "limit_down": 0.0,
+    }
+
+
+def _fetch_realtime_price(code: str, fallback_price: str) -> Tuple[str, str, bool]:
+    q = _fetch_realtime_quote(code, fallback_price)
+    return str(q.get("price", fallback_price)), str(q.get("price_source", "fallback_default")), bool(q.get("ok", False))
 
 
 def _resolve_eastmoney_zjzh(api) -> str:
@@ -578,6 +611,7 @@ def _eastmoney_api_execute(intents: List[OrderIntent], execute: bool) -> Dict[st
     receipts = []
     order_cache: Dict[str, dict] = {}
     open_order_keys = set()
+    today_buy_codes = set()
 
     def _enrich_from_orders(wth: str) -> dict:
         if not wth:
@@ -603,6 +637,8 @@ def _eastmoney_api_execute(intents: List[OrderIntent], execute: bool) -> Dict[st
             side = "buy" if mmflag == "0" else ("sell" if mmflag == "1" else "")
             wtsl = _to_int(row.get("wtsl", 0), 0)
             cjsl = _to_int(row.get("cjsl", 0), 0)
+            if code and side == "buy" and cjsl > 0:
+                today_buy_codes.add(code)
             if code and side and (wtsl <= 0 or cjsl < wtsl):
                 open_order_keys.add((code, side))
     except Exception:
@@ -644,6 +680,20 @@ def _eastmoney_api_execute(intents: List[OrderIntent], execute: bool) -> Dict[st
                 }
             )
             continue
+        if code in today_buy_codes:
+            receipts.append(
+                {
+                    "symbol": it.symbol,
+                    "stock_code": code,
+                    "side": it.side,
+                    "delta_pct": it.delta_pct,
+                    "target_pct": it.target_pct,
+                    "status": "skipped",
+                    "reason": "t1_same_day_buy_block",
+                    "zjzh": zjzh,
+                }
+            )
+            continue
         if (code, "sell") in open_order_keys:
             receipts.append(
                 {
@@ -659,7 +709,10 @@ def _eastmoney_api_execute(intents: List[OrderIntent], execute: bool) -> Dict[st
             )
             continue
 
-        order_price, price_source, price_ok = _fetch_realtime_price(code, fallback_price)
+        quote = _fetch_realtime_quote(code, fallback_price)
+        order_price = str(quote.get("price", fallback_price))
+        price_source = str(quote.get("price_source", "fallback_default"))
+        price_ok = bool(quote.get("ok", False))
         if not price_ok:
             receipts.append(
                 {
@@ -675,11 +728,31 @@ def _eastmoney_api_execute(intents: List[OrderIntent], execute: bool) -> Dict[st
                 }
             )
             continue
+        px = _to_float(order_price, 0.0)
+        limit_down = _to_float(quote.get("limit_down", 0.0), 0.0)
+        if limit_down > 0 and px <= limit_down + 1e-6:
+            receipts.append(
+                {
+                    "symbol": it.symbol,
+                    "stock_code": code,
+                    "side": it.side,
+                    "delta_pct": it.delta_pct,
+                    "target_pct": it.target_pct,
+                    "status": "skipped",
+                    "reason": "limit_down_locked",
+                    "price": order_price,
+                    "limit_down": f"{limit_down:.2f}",
+                    "price_source": price_source,
+                    "zjzh": zjzh,
+                }
+            )
+            continue
         # 查询最大可卖，避免“明明没仓位还卖”。
         max_sell_resp = api.get_max_sell(code, order_price, zjzh=zjzh)
         max_sell = _to_int(max_sell_resp.get("orderLimit", 0), 0)
-        sell_factor = _score_factor(it.score, sell_low, sell_high, reverse=True)
-        qty = max(0, (int(max_sell * sell_factor) // 100) * 100)
+        sell_factor = _asym_sell_factor(it.score, sell_low, sell_high)
+        qty_raw = min(max_sell, int(max_sell * sell_factor))
+        qty = max(0, (qty_raw // 100) * 100)
         if qty < 100:
             receipts.append(
                 {
@@ -705,6 +778,7 @@ def _eastmoney_api_execute(intents: List[OrderIntent], execute: bool) -> Dict[st
                     "price": order_price,
                     "price_source": price_source,
                     "quantity": qty,
+                    "sell_factor": round(sell_factor, 4),
                     "zjzh": zjzh,
                 }
             )
@@ -737,6 +811,7 @@ def _eastmoney_api_execute(intents: List[OrderIntent], execute: bool) -> Dict[st
                     "price": price_done,
                     "price_source": price_source,
                     "quantity": qty_done,
+                    "sell_factor": round(sell_factor, 4),
                     "order_amount_cny": round(_to_float(price_done, _to_float(fallback_price, 12.0)) * qty_done, 2),
                     "zjzh": zjzh,
                     "verified": ok and bool(wth),
@@ -790,7 +865,10 @@ def _eastmoney_api_execute(intents: List[OrderIntent], execute: bool) -> Dict[st
         est_amt = min(est_amt, max_amt)
         buy_factor = _score_factor(it.score, buy_low, buy_high, reverse=False)
         est_amt = max(min_amt, min(max_amt, est_amt * buy_factor))
-        order_price, price_source, price_ok = _fetch_realtime_price(code, fallback_price)
+        quote = _fetch_realtime_quote(code, fallback_price)
+        order_price = str(quote.get("price", fallback_price))
+        price_source = str(quote.get("price_source", "fallback_default"))
+        price_ok = bool(quote.get("ok", False))
         if not price_ok:
             receipts.append(
                 {
@@ -817,6 +895,25 @@ def _eastmoney_api_execute(intents: List[OrderIntent], execute: bool) -> Dict[st
                     "target_pct": it.target_pct,
                     "status": "skipped",
                     "reason": "existing_open_order_today",
+                    "zjzh": zjzh,
+                }
+            )
+            continue
+        px = _to_float(order_price, 0.0)
+        limit_up = _to_float(quote.get("limit_up", 0.0), 0.0)
+        if limit_up > 0 and px >= limit_up - 1e-6:
+            receipts.append(
+                {
+                    "symbol": it.symbol,
+                    "stock_code": code,
+                    "side": it.side,
+                    "delta_pct": it.delta_pct,
+                    "target_pct": it.target_pct,
+                    "status": "skipped",
+                    "reason": "limit_up_locked",
+                    "price": order_price,
+                    "limit_up": f"{limit_up:.2f}",
+                    "price_source": price_source,
                     "zjzh": zjzh,
                 }
             )

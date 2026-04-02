@@ -25,6 +25,7 @@ PROJECT_ROOT = Path("/opt/quant-llm")
 TRADE_SCRIPT = PROJECT_ROOT / "scripts" / "trade_live_qwen.py"
 EXECUTED_ORDERS = PROJECT_ROOT / "output" / "trade_logs" / "executed_orders.jsonl"
 TRADE_LOG_RE = re.compile(r"日志文件:\s*(/opt/quant-llm/output/trade_logs/trade_\d{8}_\d{6}\.json)")
+PLAN_DIR = PROJECT_ROOT / "output" / "trade_logs" / "plans"
 
 
 STOP = False
@@ -33,6 +34,7 @@ STOP = False
 @dataclass
 class SessionState:
     last_run_at: Optional[datetime] = None
+    plan_date: str = ""
 
 
 def _sig_handler(signum, frame):
@@ -154,6 +156,11 @@ def _daily_dir(base_dir: Path, now_bj: datetime) -> Path:
     return day_dir
 
 
+def _plan_file_for_date(now_bj: datetime) -> Path:
+    PLAN_DIR.mkdir(parents=True, exist_ok=True)
+    return PLAN_DIR / f"signal_plan_{now_bj.strftime('%Y%m%d')}.json"
+
+
 def _safe_name_fragment(s: str) -> str:
     s = (s or "").strip()
     if not s:
@@ -184,11 +191,25 @@ def _build_trade_tag(trade_fp: Path) -> str:
     return ""
 
 
-def _run_once(log_dir: Path, broker: str, execute: bool, model_override: str = "") -> int:
+def _run_once(
+    log_dir: Path,
+    broker: str,
+    execute: bool,
+    model_override: str = "",
+    signal_only: bool = False,
+    plan_file: Optional[Path] = None,
+    use_plan_file: Optional[Path] = None,
+) -> int:
     now_bj = datetime.now(BJ_TZ)
     ts = now_bj.strftime("%Y%m%d_%H%M%S")
     day_dir = _daily_dir(log_dir, now_bj)
     cmd = ["python3", str(TRADE_SCRIPT), "--broker", broker]
+    if signal_only:
+        cmd.insert(2, "--signal-only")
+    if plan_file is not None:
+        cmd.extend(["--plan-file", str(plan_file)])
+    if use_plan_file is not None:
+        cmd.extend(["--use-plan-file", str(use_plan_file)])
     if execute:
         cmd.insert(2, "--execute")
     env = os.environ.copy()
@@ -256,7 +277,7 @@ def main() -> None:
 
     print(f"[INIT] log_dir={log_dir}")
     print(f"[INIT] broker={args.broker} interval={args.interval_sec}s")
-    print("[INIT] policy: workday 09:00-09:25 dry-run | 09:30-11:30/13:00-15:00 execute")
+    print("[INIT] policy: workday 09:00-09:25 生成日计划+周度3-10只买入清单 | 09:30-11:30/13:00-15:00 按计划执行")
     print(f"[INIT] models: preopen={args.preopen_model} live={args.live_model}")
 
     signal.signal(signal.SIGINT, _sig_handler)
@@ -271,18 +292,51 @@ def main() -> None:
                 or (now_bj - state.last_run_at).total_seconds() >= args.interval_sec
             )
             if can_run:
-                execute_now = (mode == "live") and (not args.dry_run)
-                model_now = args.preopen_model if mode == "preopen" else args.live_model
-                print(
-                    f"[MODE] {mode} now={now_bj.strftime('%Y-%m-%d %H:%M:%S')} "
-                    f"execute={execute_now} model={model_now}"
-                )
-                _run_once(
-                    log_dir=log_dir,
-                    broker=args.broker,
-                    execute=execute_now,
-                    model_override=model_now,
-                )
+                day_key = now_bj.strftime("%Y%m%d")
+                day_plan = _plan_file_for_date(now_bj)
+                if mode == "preopen":
+                    # 预热阶段只生成一次当日信号计划，避免频繁重算。
+                    if state.plan_date != day_key or not day_plan.exists():
+                        print(
+                            f"[MODE] {mode} now={now_bj.strftime('%Y-%m-%d %H:%M:%S')} "
+                            f"signal_only=True model={args.preopen_model} plan={day_plan}"
+                        )
+                        _run_once(
+                            log_dir=log_dir,
+                            broker=args.broker,
+                            execute=False,
+                            model_override=args.preopen_model,
+                            signal_only=True,
+                            plan_file=day_plan,
+                        )
+                        state.plan_date = day_key
+                    else:
+                        print(f"[MODE] {mode} 复用当日计划: {day_plan}")
+                else:
+                    execute_now = not args.dry_run
+                    # 若无预热计划，则在 live 首轮补生成（同日仅一次）。
+                    if not day_plan.exists():
+                        print(f"[MODE] live 缺失计划，先补生成: {day_plan}")
+                        _run_once(
+                            log_dir=log_dir,
+                            broker=args.broker,
+                            execute=False,
+                            model_override=args.live_model,
+                            signal_only=True,
+                            plan_file=day_plan,
+                        )
+                        state.plan_date = day_key
+                    print(
+                        f"[MODE] {mode} now={now_bj.strftime('%Y-%m-%d %H:%M:%S')} "
+                        f"execute={execute_now} use_plan={day_plan} model={args.live_model}"
+                    )
+                    _run_once(
+                        log_dir=log_dir,
+                        broker=args.broker,
+                        execute=execute_now,
+                        model_override=args.live_model,
+                        use_plan_file=day_plan,
+                    )
                 state.last_run_at = now_bj
                 if args.once:
                     break
