@@ -49,3 +49,9 @@ __pycache__/
 # 评估结果（可重新生成）
 output/eval_results*.json
 output/eval.pid
+
+# 运行产物与本地大目录（避免污染仓库状态）
+logs/
+output/
+training-data/
+archive/legacy/
