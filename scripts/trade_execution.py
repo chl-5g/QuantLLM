@@ -155,7 +155,7 @@ def sanitize_plan(plan: List[dict]) -> List[dict]:
         if not sym:
             continue
         action = str(row.get("action", "hold")).strip().lower()
-        if action not in {"strong_buy", "buy", "hold"}:
+        if action not in {"strong_buy", "buy", "hold", "sell", "strong_sell"}:
             action = "hold"
         risk_factors = row.get("risk_factors", [])
         if not isinstance(risk_factors, list):
@@ -166,7 +166,7 @@ def sanitize_plan(plan: List[dict]) -> List[dict]:
                 "action": action,
                 "rank": int(row.get("rank", 0) or 0),
                 "score": float(row.get("score", 0) or 0),
-                "target_position_pct": float(row.get("target_position_pct", 0) or 0),
+                "target_position_pct": 0.0 if action in ("sell", "strong_sell") else float(row.get("target_position_pct", 0) or 0),
                 "reason": str(row.get("reason", ""))[:300],
                 "risk_factors": [str(x)[:80] for x in risk_factors[:8]],
             }
@@ -1028,14 +1028,20 @@ def execute_plan(plan: List[dict], execute: bool, broker: str) -> Dict[str, obje
                 accepted_pairs.add((str(r.get("symbol", "")), str(r.get("side", "")).lower()))
             if broker == "eastmoney_sim" and st == "submitted":
                 accepted_pairs.add((str(r.get("symbol", "")), str(r.get("side", "")).lower()))
+        # Build a status map per (symbol, side)
+        receipt_map: Dict[tuple, dict] = {}
+        for r in receipts:
+            key = (str(r.get("symbol", "")), str(r.get("side", "")).lower())
+            receipt_map[key] = r
+
         for it in final_intents:
-            if (it.symbol, it.side) in accepted_pairs:
-                matched = {}
-                for r in receipts:
-                    if str(r.get("symbol", "")) == it.symbol and str(r.get("side", "")).lower() == it.side:
-                        matched = r
-                        break
+            pair = (it.symbol, it.side)
+            matched = receipt_map.get(pair, {})
+            st = str(matched.get("status", "")).lower()
+            if pair in accepted_pairs:
                 _append_idem(getattr(it, "_idem_key"), it, "accepted", broker=broker, receipt=matched)
+            elif st == "failed":
+                _append_idem(getattr(it, "_idem_key"), it, "failed", broker=broker, receipt=matched)
 
     result.update(
         {

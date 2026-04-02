@@ -22,7 +22,7 @@ STOCK_RANK_SYSTEM = """你是专业量化分析师。根据市场环境和候选
 2. 牛市偏趋势跟随，熊市/震荡偏困境反转和防御
 3. 关注多因子共振：RSI超卖+布林下轨+量能萎缩=强反转信号
 4. 只输出一个JSON对象，格式：{{"rankings": [...]}}
-5. 每个元素：rank(int), symbol(str), score(number), action("strong_buy"/"buy"/"hold"), reason(str), risk_factors(list[str])"""
+5. 每个元素：rank(int), symbol(str), score(number), action("strong_buy"/"buy"/"hold"/"sell"/"strong_sell"), reason(str), risk_factors(list[str])"""
 
 STOCK_RANK_OUTPUT_SCHEMA = {
     "type": "object",
@@ -38,7 +38,7 @@ STOCK_RANK_OUTPUT_SCHEMA = {
                     "rank": {"type": "integer", "minimum": 1},
                     "symbol": {"type": "string"},
                     "score": {"type": "number"},
-                    "action": {"enum": ["strong_buy", "buy", "hold"]},
+                    "action": {"enum": ["strong_buy", "buy", "hold", "sell", "strong_sell"]},
                     "reason": {"type": "string"},
                     "risk_factors": {"type": "array", "items": {"type": "string"}},
                 },
@@ -49,7 +49,7 @@ STOCK_RANK_OUTPUT_SCHEMA = {
 
 
 def _extract_json(text):
-    """只提取首个完整 JSON 对象，忽略尾部污染字符块。"""
+    """提取 JSON 对象：优先完整解析，回退到截断尾部后重试。"""
     text = (text or "").strip()
     if not text:
         raise json.JSONDecodeError("empty", text, 0)
@@ -62,9 +62,26 @@ def _extract_json(text):
     if m:
         text = m.group(1).strip()
 
-    decoder = json.JSONDecoder()
+    # 优先尝试完整 json.loads（处理 prefill 拼接后的完整 JSON）
+    try:
+        obj = json.loads(text)
+        if isinstance(obj, dict):
+            return obj
+    except json.JSONDecodeError:
+        pass
 
-    # 从首个 '{' 开始尝试 raw_decode，只保留第一个完整对象
+    # 回退：截断尾部垃圾后重试（找最后一个 ]} 闭合）
+    idx = text.rfind("]}")
+    if idx > 0:
+        try:
+            obj = json.loads(text[:idx + 2])
+            if isinstance(obj, dict):
+                return obj
+        except json.JSONDecodeError:
+            pass
+
+    # 最终回退：raw_decode 从首个 '{' 开始
+    decoder = json.JSONDecoder()
     starts = [i for i, ch in enumerate(text) if ch == "{"]
     for s in starts:
         try:
