@@ -121,15 +121,6 @@ step_generate() {
 step_merge() {
     log "========== Step 3: 合并训练集 =========="
 
-    # v1 指令数据
-    if [ ! -f "$DATA_DIR/merged_train.jsonl" ]; then
-        log "生成 v1 指令数据..."
-        python3 "$SCRIPTS_DIR/prepare_dataset.py"
-    else
-        v1_count=$(wc -l < "$DATA_DIR/merged_train.jsonl")
-        log "v1 指令数据已存在 (${v1_count} 条)"
-    fi
-
     # 合并全部数据源 → v4
     log "合并最终训练集..."
     python3 "$SCRIPTS_DIR/merge_and_retrain.py"
@@ -170,7 +161,7 @@ step_train() {
     log "开始训练..."
     "$PROJECT_DIR/finetune-env/bin/python3" "$SCRIPTS_DIR/train.py"
 
-    log "训练完成！模型保存在: output/quant-qwen2.5-14b-lora/"
+    log "训练完成！模型输出目录见 config.yaml -> model.output_dir"
 }
 
 # ============================================================
@@ -187,10 +178,6 @@ step_export() {
 # ============================================================
 step_eval() {
     log "========== Step 6: 模型评估 =========="
-
-    if [ ! -d "$PROJECT_DIR/output/quant-qwen2.5-14b-lora" ]; then
-        err "模型目录不存在，请先训练"
-    fi
 
     # 释放 ollama 显存
     curl -s "$OLLAMA_URL/api/generate" -d '{"model":"qwen3:14b","keep_alive":0}' >/dev/null 2>&1 || true

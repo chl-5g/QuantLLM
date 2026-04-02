@@ -11,6 +11,7 @@ v5: 预测性训练数据（实际收益标签） + 板块轮动预测
 import json
 import os
 import hashlib
+import random
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(PROJECT_ROOT, "training-data")
@@ -29,8 +30,11 @@ sources = [
     (os.path.join(DATA_DIR, "sector_rotation.jsonl"), "sector_rotation"),
 ]
 
-# 预测数据过采样倍数（防止被40k知识QA淹没）
-OVERSAMPLE_SOURCES = {"predictive_signals": 2, "sector_rotation": 2}
+# 过采样倍数
+OVERSAMPLE_SOURCES = {"sector_rotation": 3}
+
+# 下采样：随机抽取指定条数（控制总量）
+DOWNSAMPLE_SOURCES = {"baai_zh_finance": 15000}
 
 
 def user_hash(record):
@@ -51,8 +55,15 @@ with open(OUTPUT, "w", encoding="utf-8") as out:
         count = 0
         skipped = 0
         try:
+            # 下采样：先读全部再随机抽取
+            downsample_n = DOWNSAMPLE_SOURCES.get(label)
             with open(path, "r", encoding="utf-8") as f:
-                for line in f:
+                lines = f.readlines()
+            if downsample_n and len(lines) > downsample_n:
+                random.seed(42)
+                lines = random.sample(lines, downsample_n)
+
+            for line in lines:
                     record = json.loads(line)
                     h = user_hash(record)
 

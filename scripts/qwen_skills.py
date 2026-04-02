@@ -1,15 +1,18 @@
 """
-Qwen3 Skills 系统 — 结构化任务调用框架。
-类似 RAG 中的 cross-encoder reranker：规则引擎粗排 → LLM 精排。
+Qwen3 Skills 系统 - 结构化任务调用框架。
+类似 RAG 中的 cross-encoder reranker：规则引擎粗排 -> LLM 精排。
 """
 
 import json
+import os
 import re
+
 import jsonschema
-from _config import cfg, call_ollama
+
+from _config import call_ollama, cfg
 
 # ============================================================
-# StockRankSkill — top50 → top10 精排
+# StockRankSkill - top50 -> top10 精排
 # ============================================================
 
 STOCK_RANK_SYSTEM = """你是专业量化分析师。根据市场环境和候选股票的技术指标，从候选列表中精选最优的{top_n}只股票。
@@ -37,40 +40,40 @@ STOCK_RANK_OUTPUT_SCHEMA = {
                     "score": {"type": "number"},
                     "action": {"enum": ["strong_buy", "buy", "hold"]},
                     "reason": {"type": "string"},
-                    "risk_factors": {
-                        "type": "array",
-                        "items": {"type": "string"}
-                    }
-                }
-            }
+                    "risk_factors": {"type": "array", "items": {"type": "string"}},
+                },
+            },
         }
-    }
+    },
 }
 
 
 def _extract_json(text):
-    """从可能包含 markdown 代码块或 thinking 残留的文本中提取第一个完整 JSON。"""
-    text = text.strip()
-    # 去掉 thinking 残留（模型可能在 JSON 后输出 </think> 和重复内容）
-    if "</think>" in text:
-        text = text[:text.index("</think>")].strip()
-    # 尝试直接解析
-    if text.startswith("{"):
-        # 用 raw_decode 只取第一个完整 JSON 对象
-        decoder = json.JSONDecoder()
-        obj, _ = decoder.raw_decode(text)
-        return obj
-    # 提取 ```json ... ``` 块
-    m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    """只提取首个完整 JSON 对象，忽略尾部污染字符块。"""
+    text = (text or "").strip()
+    if not text:
+        raise json.JSONDecodeError("empty", text, 0)
+
+    # 去掉 think 标签
+    text = re.sub(r"</?think>", "", text, flags=re.IGNORECASE).strip()
+
+    # 去掉 markdown 代码块外壳
+    m = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL | re.IGNORECASE)
     if m:
-        return json.loads(m.group(1))
-    # 提取第一个 { ... } 块
-    m = re.search(r"\{.*\}", text, re.DOTALL)
-    if m:
-        decoder = json.JSONDecoder()
-        obj, _ = decoder.raw_decode(m.group(0))
-        return obj
-    raise json.JSONDecodeError("No JSON found", text, 0)
+        text = m.group(1).strip()
+
+    decoder = json.JSONDecoder()
+
+    # 从首个 '{' 开始尝试 raw_decode，只保留第一个完整对象
+    starts = [i for i, ch in enumerate(text) if ch == "{"]
+    for s in starts:
+        try:
+            obj, _ = decoder.raw_decode(text[s:])
+            if isinstance(obj, dict):
+                return obj
+        except Exception:
+            continue
+    raise json.JSONDecodeError("No JSON object found", text, 0)
 
 
 def call_skill_stock_rank(market_regime, candidates, top_n=None):
@@ -84,43 +87,48 @@ def call_skill_stock_rank(market_regime, candidates, top_n=None):
         top_n = skill_cfg.get("top_n", 10)
 
     system = STOCK_RANK_SYSTEM.format(top_n=top_n)
-    user_msg = json.dumps({
-        "market_regime": market_regime,
-        "top_n": top_n,
-        "candidates": candidates
-    }, ensure_ascii=False)
+    user_msg = json.dumps({"market_regime": market_regime, "top_n": top_n, "candidates": candidates}, ensure_ascii=False)
 
-    model = cfg["ollama"]["generation_model"]
+    env_model = os.getenv("STOCK_RANK_MODEL", "").strip()
+    model = (
+        env_model
+        or skill_cfg.get("model")
+        or cfg.get("ollama", {}).get("live_rank_model")
+        or cfg["ollama"]["generation_model"]
+    )
 
     # assistant prefill 绕过 qwen3 的 thinking 模式
-    # qwen3 无法通过 API 参数关闭 thinking，但预填 "{" 可强制直接输出 JSON
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": user_msg},
-        {"role": "assistant", "content": '{"rankings": ['}
+        {"role": "assistant", "content": '{"rankings": ['},
     ]
 
-    # 训练期间 GPU 不够，用 CPU 推理；技能调用不频繁，CPU 速度可接受
     num_gpu = skill_cfg.get("num_gpu")
     extra = {}
     if num_gpu is not None:
         extra["num_gpu"] = num_gpu
 
-    for attempt in range(2):
+    attempts = int(skill_cfg.get("attempts", 2))
+    ollama_timeout = int(skill_cfg.get("timeout", cfg.get("ollama", {}).get("timeout", 180)))
+    ollama_retries = int(skill_cfg.get("ollama_max_retries", 1))
+
+    for attempt in range(attempts):
         raw = call_ollama(
             model=model,
             messages=messages,
             temperature=skill_cfg.get("temperature", 0),
-            num_predict=skill_cfg.get("num_predict", 4096),
+            num_predict=skill_cfg.get("num_predict", 1024),
             seed=skill_cfg.get("seed", 42),
+            timeout=ollama_timeout,
+            max_retries=ollama_retries,
             **extra,
         )
         if raw is None:
             continue
 
-        # 拼回 prefill 的前缀
+        # 拼回 prefill 前缀，并只保留首个 JSON 对象
         full_json = '{"rankings": [' + raw
-
         try:
             data = _extract_json(full_json)
             jsonschema.validate(data, STOCK_RANK_OUTPUT_SCHEMA)
@@ -132,3 +140,4 @@ def call_skill_stock_rank(market_regime, candidates, top_n=None):
 
     print("  [SKILL] stock_rank 调用失败")
     return None
+
