@@ -82,11 +82,20 @@ def _save_state(positions: Dict[str, float]) -> None:
 
 
 def _load_idem_today(broker: str) -> set[str]:
+    """
+    加载今日已执行的幂等 key。
+    - accepted/submitted/filled → 直接屏蔽（已成交不重复）
+    - failed → 允许重试，但超过 max_retry_per_symbol 次后屏蔽
+    """
     fp = _idem_file()
     if not fp.exists():
         return set()
     today = datetime.now().strftime("%Y-%m-%d")
-    keys = set()
+    max_retry = int(cfg.get("trade_live", {}).get("max_retry_per_symbol", 3))
+
+    blocked = set()
+    fail_count: Dict[str, int] = {}  # key -> failed count
+
     with fp.open("r", encoding="utf-8", errors="ignore") as f:
         for line in f:
             line = line.strip()
@@ -96,9 +105,19 @@ def _load_idem_today(broker: str) -> set[str]:
                 row = json.loads(line)
             except Exception:
                 continue
-            if str(row.get("date", "")).startswith(today) and str(row.get("broker", "")) == broker:
-                keys.add(str(row.get("idempotency_key", "")))
-    return keys
+            if not str(row.get("date", "")).startswith(today):
+                continue
+            if str(row.get("broker", "")) != broker:
+                continue
+            key = str(row.get("idempotency_key", ""))
+            status = str(row.get("status", "")).lower()
+            if status in ("accepted", "submitted", "filled"):
+                blocked.add(key)
+            elif status == "failed":
+                fail_count[key] = fail_count.get(key, 0) + 1
+                if fail_count[key] >= max_retry:
+                    blocked.add(key)
+    return blocked
 
 
 def _append_idem(key: str, intent: OrderIntent, status: str, broker: str, receipt: Optional[dict] = None) -> None:
@@ -144,7 +163,8 @@ def _daily_trade_count(broker: str) -> int:
 
 
 def _idem_key(intent: OrderIntent, broker: str) -> str:
-    base = f"{datetime.now().strftime('%Y-%m-%d')}|{broker}|{intent.symbol}|{intent.side}|{intent.delta_pct:.4f}|{intent.target_pct:.4f}"
+    """幂等 key 只含 (日期|broker|symbol|side)，不含 delta/target 避免微变绕过。"""
+    base = f"{datetime.now().strftime('%Y-%m-%d')}|{broker}|{intent.symbol}|{intent.side}"
     return hashlib.sha1(base.encode("utf-8")).hexdigest()[:16]
 
 
