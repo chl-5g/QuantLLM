@@ -134,7 +134,7 @@ def call_skill_stock_rank(market_regime, candidates, top_n=None):
         or cfg["ollama"]["generation_model"]
     )
 
-    # assistant prefill 绕过 qwen3 的 thinking 模式
+    # assistant prefill 保证 JSON 开头（思考模式已由 think=False 关闭）
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": user_msg},
@@ -159,6 +159,7 @@ def call_skill_stock_rank(market_regime, candidates, top_n=None):
             seed=skill_cfg.get("seed", 42),
             timeout=ollama_timeout,
             max_retries=ollama_retries,
+            think=False,
             **extra,
         )
         if raw is None:
