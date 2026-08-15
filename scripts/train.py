@@ -111,6 +111,10 @@ records = filtered
 
 texts = [format_chatml(r) for r in records]
 sources = [r.get("source", "unknown") for r in records]
+# 稀有数据源（<2 条）合并为 other，避免分层抽样因最小类别数失败
+from collections import Counter as _Counter
+_src_counts = _Counter(sources)
+sources = ["other" if _src_counts[s] < 2 else s for s in sources]
 full_dataset = Dataset.from_dict({"text": texts, "source": sources})
 
 # 分层抽样：确保每个数据源在验证集中都有代表性
