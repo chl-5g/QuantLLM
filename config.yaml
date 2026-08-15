@@ -21,7 +21,7 @@ data:
 # ----------------------------------------------------------
 model:
   base_model: /root/.cache/huggingface/hub/models--unsloth--Qwen3.8-27B
-  max_seq_length: 1024
+  max_seq_length: 512               # 显存阶梯: 1024 OOM → 512
   output_dir: output/quant-qwen3.8-27b-v1-experiment
   version: v1-experiment                               # Qwen3.8-27B 实验
 
