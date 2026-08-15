@@ -111,10 +111,6 @@ records = filtered
 
 texts = [format_chatml(r) for r in records]
 sources = [r.get("source", "unknown") for r in records]
-# 稀有数据源（<2 条）合并为 other，避免分层抽样因最小类别数失败
-from collections import Counter as _Counter
-_src_counts = _Counter(sources)
-sources = ["other" if _src_counts[s] < 2 else s for s in sources]
 full_dataset = Dataset.from_dict({"text": texts, "source": sources})
 
 # 分层抽样：确保每个数据源在验证集中都有代表性
@@ -129,9 +125,16 @@ if len(unique_sources) > 1:
     full_dataset = full_dataset.cast_column(
         "source", ClassLabel(names=sorted(unique_sources))
     )
-    split = full_dataset.train_test_split(
-        test_size=EVAL_RATIO, seed=SEED, stratify_by_column="source"
-    )
+    try:
+        split = full_dataset.train_test_split(
+            test_size=EVAL_RATIO, seed=SEED, stratify_by_column="source"
+        )
+    except ValueError:
+        # 稀有数据源（过滤后可能 <2 条）导致分层抽样失败，降级随机拆分
+        print("   分层抽样失败（稀有数据源样本过少），降级为随机拆分")
+        split = full_dataset.remove_columns("source").train_test_split(
+            test_size=EVAL_RATIO, seed=SEED
+        )
 else:
     # 只有一个来源，普通随机拆分即可
     print(f"   仅单一数据源 '{unique_sources[0]}'，使用随机拆分")
