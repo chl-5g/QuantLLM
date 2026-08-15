@@ -11,8 +11,10 @@ import random
 import requests
 import time
 
-OLLAMA_URL = "http://127.0.0.1:11434/api/chat"
-MODEL = "qwen3:14b"
+from _config import cfg
+
+OLLAMA_URL = cfg["ollama"]["url"]
+MODEL = cfg["ollama"]["generation_model"]
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUTPUT_FILE = os.path.join(PROJECT_ROOT, "training-data", "quant_calculations.jsonl")
 PROGRESS_FILE = os.path.join(PROJECT_ROOT, "training-data", ".calc_progress.json")

@@ -73,8 +73,8 @@ def main():
                         help="显示每个Agent的详细推理过程")
     parser.add_argument("--ollama", action="store_true",
                         help="使用本地 ollama (默认)")
-    parser.add_argument("--model", type=str, default="qwen3:14b",
-                        help="模型名称 (默认 qwen3:14b)")
+    parser.add_argument("--model", type=str, default=os.environ.get("OLLAMA_GENERATION_MODEL", "qwen3.8:27b"),
+                        help="模型名称 (默认 .env 配置，当前 qwen3.8:27b)")
     parser.add_argument("--analysts", type=str, default=None,
                         help="指定分析师 (逗号分隔)，默认全部")
     parser.add_argument("--list-analysts", action="store_true",
@@ -101,7 +101,7 @@ def main():
     if args.analysts:
         selected_analysts = [a.strip() for a in args.analysts.split(",")]
 
-    provider = "ollama" if args.ollama else "ollama"
+    provider = "ollama" if args.ollama else "openai"
 
     print(f"\n{'~' * 50}")
     print(f"  Tickers: {', '.join(tickers)}")

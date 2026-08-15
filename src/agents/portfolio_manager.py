@@ -100,6 +100,8 @@ def portfolio_management_agent(state: AgentState, agent_id: str = "portfolio_man
          "- 多位分析师一致看多+风控允许→buy\n"
          "- 多位分析师一致看空or风控不足→sell\n"
          "- 信号分歧→hold\n"
+         "- 重要：conf=0 或 'neutral' 表示该分析师数据不足/无信号，不算分歧，应忽略\n"
+         "- 只有1个分析师有有效信号(conf>0且非neutral)时，直接采纳该信号决策\n"
          "- A股T+1，当日买入次日才能卖，买入时需谨慎\n"
          "- 仅返回JSON，reasoning简短(≤100字)。"),
         ("human",

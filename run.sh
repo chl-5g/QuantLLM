@@ -27,7 +27,12 @@ PROJECT_DIR="/opt/quant-llm"
 SCRIPTS_DIR="$PROJECT_DIR/scripts"
 DATA_DIR="$PROJECT_DIR/training-data"
 VENV="$PROJECT_DIR/finetune-env/bin/activate"
-OLLAMA_URL="http://localhost:11434"
+# 加载 .env（ollama 模型配置唯一来源，改模型只改这里）
+if [ -f "$PROJECT_DIR/.env" ]; then
+    set -a; . "$PROJECT_DIR/.env"; set +a
+fi
+OLLAMA_URL="${OLLAMA_URL:-http://127.0.0.1:11434/api/chat}"
+OLLAMA_BASE="${OLLAMA_URL%/api/chat}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -103,11 +108,11 @@ step_generate() {
     python3 "$SCRIPTS_DIR/fetch_fingpt_data.py" || warn "FinGPT 数据下载失败，跳过"
 
     # 量化计算种子扩展（需 ollama）
-    if curl -s "$OLLAMA_URL/api/tags" >/dev/null 2>&1; then
-        log "[2/3] 量化计算种子扩展 (qwen3:14b)..."
+    if curl -s "$OLLAMA_BASE/api/tags" >/dev/null 2>&1; then
+        log "[2/3] 量化计算种子扩展 (${OLLAMA_GENERATION_MODEL:-qwen3.8:27b})..."
         python3 "$SCRIPTS_DIR/generate_quant_calculations.py" || warn "量化计算扩展失败，跳过"
 
-        log "[3/3] 推理链增强 (deepseek-r1:32b)..."
+        log "[3/3] 推理链增强 (${OLLAMA_REASONING_MODEL:-qwen3.8:27b})..."
         python3 "$SCRIPTS_DIR/add_reasoning_chains.py" || warn "推理链增强失败，跳过"
     else
         warn "ollama 不可用，跳过量化计算和推理链增强"
@@ -157,8 +162,8 @@ step_train() {
     gpu_mem=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | head -1)
     if [ "$gpu_mem" -gt 5000 ]; then
         warn "GPU 显存已占用 ${gpu_mem}MB，尝试释放 ollama 模型..."
-        curl -s "$OLLAMA_URL/api/generate" -d '{"model":"qwen3:14b","keep_alive":0}' >/dev/null 2>&1 || true
-        curl -s "$OLLAMA_URL/api/generate" -d '{"model":"deepseek-r1:32b","keep_alive":0}' >/dev/null 2>&1 || true
+        curl -s "$OLLAMA_BASE/api/generate" -d "{\"model\":\"${OLLAMA_GENERATION_MODEL:-qwen3.8:27b}\",\"keep_alive\":0}" >/dev/null 2>&1 || true
+        curl -s "$OLLAMA_BASE/api/generate" -d "{\"model\":\"${OLLAMA_REASONING_MODEL:-qwen3.8:27b}\",\"keep_alive\":0}" >/dev/null 2>&1 || true
         sleep 5
 
         gpu_mem=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | head -1)
@@ -190,8 +195,8 @@ step_eval() {
     log "========== Step 6: 模型评估 =========="
 
     # 释放 ollama 显存
-    curl -s "$OLLAMA_URL/api/generate" -d '{"model":"qwen3:14b","keep_alive":0}' >/dev/null 2>&1 || true
-    curl -s "$OLLAMA_URL/api/generate" -d '{"model":"deepseek-r1:32b","keep_alive":0}' >/dev/null 2>&1 || true
+    curl -s "$OLLAMA_BASE/api/generate" -d "{\"model\":\"${OLLAMA_GENERATION_MODEL:-qwen3.8:27b}\",\"keep_alive\":0}" >/dev/null 2>&1 || true
+    curl -s "$OLLAMA_BASE/api/generate" -d "{\"model\":\"${OLLAMA_REASONING_MODEL:-qwen3.8:27b}\",\"keep_alive\":0}" >/dev/null 2>&1 || true
     sleep 3
 
     python3 "$SCRIPTS_DIR/evaluate.py"

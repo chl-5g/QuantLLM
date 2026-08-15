@@ -46,9 +46,15 @@ def technical_analyst_agent(state: AgentState, agent_id: str = "technical_analys
     # 用 LLM 综合判断
     prompt = ChatPromptTemplate.from_messages([
         ("system",
-         "你是A股技术面分析师，专注反转策略。A股所有技术因子IC均为负值——超卖看多、超买看空。\n"
+         "你是A股技术面分析师，专注小盘股反转策略。核心选股条件：\n"
+         "1. 市值<10亿（小盘股，弹性大）\n"
+         "2. 历史底部（价格处于60日低位区间，下跌空间有限）\n"
+         "3. 涨幅<20%（尚未启动，避免追高）\n"
+         "4. 换手率>3%或量比>1.5（有资金关注，流动性充足）\n\n"
+         "A股所有技术因子IC均为负值——超卖看多、超买看空。\n"
          "评分逻辑：RSI<30看多(超卖)，RSI>70看空(超买)；价格远低于MA20看多(均值回归)；\n"
          "缩量筑底看多，放量冲顶看空；低波动看多，高波动看空。\n"
+         "满足4个选股条件且技术面超卖的股票给予高置信度看多信号。\n"
          "输出信号：bullish(看多)/bearish(看空)/neutral(中性)，confidence 0-100。"),
         ("human",
          "以下股票的技术指标数据，请逐一给出技术面信号：\n\n{indicators}\n\n"

@@ -66,9 +66,9 @@ training:
 # ----------------------------------------------------------
 ollama:
   url: http://127.0.0.1:11434/api/chat
-  generation_model: qwen3:14b          # 种子扩展
-  live_rank_model: qwen3:4b-nothink    # 实盘精排优先模型（低延迟）
-  reasoning_model: deepseek-r1:32b     # 推理链增强
+  generation_model: qwen3.8:27b        # 种子扩展（.env 可覆盖）
+  live_rank_model: qwen3.8:27b         # 实盘精排优先模型（.env 可覆盖，27B 吞吐待实测）
+  reasoning_model: qwen3.8:27b         # 推理链增强（.env 可覆盖）
   temperature: 0.7
   timeout: 300                         # 秒
 

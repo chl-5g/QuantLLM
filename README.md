@@ -98,9 +98,10 @@ pip install langgraph langchain-core pydantic  # 多 Agent 工作流
 如需使用数据增强功能，还需本地运行 ollama：
 
 ```bash
-ollama pull qwen3:14b        # 量化计算种子扩展
-ollama pull deepseek-r1:32b  # 推理链增强（可选）
+ollama pull qwen3.8:27b      # 数据增强模型（模型名由 .env 配置，参考 .env.example）
 ```
+
+模型配置统一写在 `.env`（OLLAMA_URL / OLLAMA_GENERATION_MODEL / OLLAMA_LIVE_RANK_MODEL / OLLAMA_REASONING_MODEL），改模型只改这里。
 
 ## 项目结构
 

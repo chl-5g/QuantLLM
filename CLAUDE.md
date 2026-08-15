@@ -64,6 +64,7 @@ export_gguf.py                              → output/gguf/
 
 - **`scripts/_config.py`** — 所有脚本的配置入口。加载 `config.yaml`，校验必要字段和取值范围，提供 `cfg` 字典、路径常量和 `call_ollama()` 辅助函数。所有脚本统一 `from _config import cfg`。
 - **`config.yaml`** — 中心化配置：数据路径、LoRA 参数（r=32, rslora）、训练超参、ollama 连接、风控参数等。修改配置只改此文件。
+- **`.env`** — ollama 模型配置唯一来源（OLLAMA_URL / OLLAMA_GENERATION_MODEL / OLLAMA_LIVE_RANK_MODEL / OLLAMA_REASONING_MODEL），由 `_config.py` 自动加载并覆盖 config.yaml 对应项；改模型只改 `.env`。参考 `.env.example`。
 - **`convert_all_to_training.py`** — 按市场类型生成领域特定问答模板（技术分析、交易信号 JSON、评分等），每个市场有独立的模板集。
 - **`train.py`** — QLoRA 训练：4bit 量化加载 → LoRA 挂载（7个目标模块）→ ChatML 格式化 → 分层抽样 train/val split → SFTTrainer + early stopping + cosine annealing。
 - **`evaluate.py`** — 三维评估：65 道手写题（含 15 道对抗性）+ holdout 集 + ROUGE-L/数值正确性/一致性指标。结果按版本存档。
@@ -89,7 +90,7 @@ export_gguf.py                              → output/gguf/
 
 - **推理链（`<think>` 标签）只用于知识解释和量化计算类问题**，不用于交易决策（基于 StockBench 研究结论）
 - **交易信号统一为 JSON 输出格式**：`{action, symbol, reason, confidence, stop_loss}`
-- **数据增强依赖本地 ollama**：qwen3:14b（种子扩展）+ deepseek-r1:32b（推理链）
+- **数据增强依赖本地 ollama**：模型配置在 `.env`（当前 qwen3.8:27b），种子扩展/推理链共用，改模型只改 `.env`
 - **训练数据带来源标记**（`source` 字段），支持分层抽样和来源分析
 
 ## Config Reference
@@ -116,9 +117,14 @@ export_gguf.py                              → output/gguf/
 - 看训练进度 → 执行 `bash /opt/quant-llm/watch_training.sh`
 - 用户说"写入记忆" → 同时更新 MEMORY.md 和本文件（`/opt/quant-llm/CLAUDE.md`）
 
+## 当前目标
+
+- **清理硬编码（进行中）**：模型相关配置已集中到 `.env`（唯一来源），禁止在脚本/源码中硬编码模型名或 URL；发现残留立即改走 `_config.py` 读取
+- **qwen3.8:27b 迁移（2026-08-15）**：已替换 qwen3:14b / qwen3:4b-nothink / deepseek-r1:32b；待模型下载完成后实测 A5000 实盘精排吞吐（27B vs 原 4B 延迟敏感）
+
 
 ## 实盘执行架构（更新）
 
-- 当前实盘流程为**两层**：`规则初筛 -> Qwen14B精筛/执行`
+- 当前实盘流程为**两层**：`规则初筛 -> Qwen 精筛/执行`（模型由 .env 配置，当前 qwen3.8:27b）
 - 不再依赖 Claude 终审环节
 - 交易指令与执行结果统一写入 `output/trade_logs/` 目录

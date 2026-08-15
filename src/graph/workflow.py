@@ -1,5 +1,7 @@
 """LangGraph 工作流 — 多 Agent 编排"""
 
+import os
+
 from langgraph.graph import END, StateGraph
 
 from src.graph.state import AgentState
@@ -55,15 +57,28 @@ def run_quant_llm(
     initial_cash: float = 100000.0,
     show_reasoning: bool = False,
     selected_analysts: list[str] | None = None,
-    model_name: str = "qwen3:14b",
+    model_name: str = os.environ.get("OLLAMA_GENERATION_MODEL", "qwen3.8:27b"),
     model_provider: str = "ollama",
 ):
     """运行 QuantLLM 多 Agent 交易系统"""
     from langchain_core.messages import HumanMessage
     from src.tools.api import load_market_data
+    from src.tools.screener import screen_tickers
 
     # 加载数据
     loaded = load_market_data(tickers, start_date, end_date)
+
+    # 硬编码选股筛选
+    tickers_original = list(tickers)
+    tickers = screen_tickers(tickers, loaded, start_date, end_date)
+    dropped = set(tickers_original) - set(tickers)
+    if dropped:
+        print(f"\n  硬编码筛选: {len(tickers_original)} → {len(tickers)} 只")
+        for t in sorted(dropped):
+            print(f"    ✗ {t} 淘汰（不满足：市值<15亿、60日底部30%%、涨幅<20%%、量比>0.8、非ST）")
+    if not tickers:
+        print("  ⚠ 无股票通过筛选")
+        return {"decisions": {}, "analyst_signals": {}}
 
     # 构建初始持仓
     positions = {}

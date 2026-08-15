@@ -10,9 +10,39 @@ import yaml
 # 项目根目录（config.yaml 所在位置）
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+
+def _load_env(path):
+    """加载 .env（KEY=VALUE），不引入 dotenv 依赖；已存在的环境变量优先"""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                k, v = k.strip(), v.strip().strip('"').strip("'")
+                if k:
+                    os.environ.setdefault(k, v)
+    except FileNotFoundError:
+        pass
+
+
+_load_env(os.path.join(PROJECT_ROOT, ".env"))
+
 _config_path = os.path.join(PROJECT_ROOT, "config.yaml")
 with open(_config_path, "r", encoding="utf-8") as f:
     cfg = yaml.safe_load(f)
+
+# .env 覆盖 ollama 配置（改模型只改 .env）
+_ENV_OLLAMA_MAP = {
+    "OLLAMA_URL": "url",
+    "OLLAMA_GENERATION_MODEL": "generation_model",
+    "OLLAMA_LIVE_RANK_MODEL": "live_rank_model",
+    "OLLAMA_REASONING_MODEL": "reasoning_model",
+}
+for env_key, cfg_key in _ENV_OLLAMA_MAP.items():
+    if os.environ.get(env_key):
+        cfg["ollama"][cfg_key] = os.environ[env_key]
 
 
 def path(relative):
@@ -88,7 +118,7 @@ def call_ollama(model, messages, temperature=0.7, num_predict=4096,
                 seed=None, format=None, think=None, num_gpu=None):
     """
     统一的 ollama 调用函数。
-    model: 模型名称（如 qwen3:14b, deepseek-r1:32b）
+    model: 模型名称（由 .env 配置，如 qwen3.8:27b）
     messages: [{"role": "user", "content": "..."}]
     strip_think: 是否去除 <think> 标签（qwen3 场景）
     返回 content 字符串，失败返回 None

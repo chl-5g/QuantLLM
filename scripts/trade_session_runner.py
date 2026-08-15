@@ -18,6 +18,8 @@ from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
 
+from _config import cfg  # 加载 .env（ollama 模型配置）
+
 try:
     from chinese_calendar import is_workday as _cc_is_workday
 except Exception:  # optional dependency fallback
@@ -273,8 +275,8 @@ def main() -> None:
     parser.add_argument("--once", action="store_true", help="仅运行一次后退出")
     parser.add_argument("--force-run", action="store_true", help="忽略交易时段限制（用于测试）")
     parser.add_argument("--force-mode", choices=["preopen", "live"], default=None, help="强制时段模式（用于测试）")
-    parser.add_argument("--preopen-model", default="qwen3:14b", help="09:15-09:25 预热时段模型")
-    parser.add_argument("--live-model", default="qwen3:4b-nothink", help="09:30后执行时段模型")
+    parser.add_argument("--preopen-model", default=cfg["ollama"]["generation_model"], help="09:15-09:25 预热时段模型（.env 配置）")
+    parser.add_argument("--live-model", default=cfg["ollama"]["live_rank_model"], help="09:30后执行时段模型（.env 配置）")
     args = parser.parse_args()
 
     if args.interval_sec < 30:

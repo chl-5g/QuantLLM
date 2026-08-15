@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 推理链增强脚本
-用 qwen3:14b 思考模式为高质量训练数据添加 <think> 推理链
+用本地 ollama 思考模式（模型由 .env/config.yaml 配置）为高质量训练数据添加 <think> 推理链
 输入：merged_train_v2.jsonl 中的高质量记录
 输出：training-data/reasoning_enhanced.jsonl
 """
@@ -12,8 +12,10 @@ import hashlib
 import requests
 import time
 
-OLLAMA_URL = "http://127.0.0.1:11434/api/chat"
-MODEL = "qwen3:14b"
+from _config import cfg
+
+OLLAMA_URL = cfg["ollama"]["url"]
+MODEL = cfg["ollama"]["reasoning_model"]
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INPUT_FILE = os.path.join(PROJECT_ROOT, "training-data", "merged_train_v2.jsonl")
 OUTPUT_FILE = os.path.join(PROJECT_ROOT, "training-data", "reasoning_enhanced.jsonl")
@@ -53,7 +55,7 @@ MAX_RECORDS = 2000
 
 
 def call_ollama(messages, max_retries=2, timeout=120):
-    """调用 qwen3:14b 思考模式，返回 (thinking, content) 元组"""
+    """调用本地模型思考模式，返回 (thinking, content) 元组"""
     for attempt in range(max_retries + 1):
         try:
             resp = requests.post(
@@ -159,7 +161,7 @@ def select_records(input_file, max_count):
 
 def main():
     print("=" * 60)
-    print("推理链增强 (qwen3:14b 思考模式)")
+    print(f"推理链增强 ({MODEL} 思考模式)")
     print("=" * 60)
 
     if not os.path.exists(INPUT_FILE):

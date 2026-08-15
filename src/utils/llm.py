@@ -18,7 +18,8 @@ except ImportError:
 def call_llm(prompt, pydantic_model, agent_name=None, state=None,
              max_retries=3, default_factory=None):
     """调用 LLM，支持 JSON 模式输出"""
-    model_name = state.get("metadata", {}).get("model_name", "qwen3:14b") if state else "qwen3:14b"
+    default_model = os.environ.get("OLLAMA_GENERATION_MODEL", "qwen3.8:27b")
+    model_name = state.get("metadata", {}).get("model_name", default_model) if state else default_model
     model_provider = state.get("metadata", {}).get("model_provider", "ollama") if state else "ollama"
 
     for attempt in range(max_retries):

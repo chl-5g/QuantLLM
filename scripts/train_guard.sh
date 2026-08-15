@@ -11,7 +11,13 @@ PROJECT_DIR="/opt/quant-llm"
 VENV="$PROJECT_DIR/finetune-env/bin/python3"
 TRAIN_SCRIPT="$PROJECT_DIR/scripts/train.py"
 LOG_DIR="$PROJECT_DIR/output"
-OLLAMA_URL="http://localhost:11434"
+
+# 加载 .env（ollama 模型配置唯一来源，改模型只改这里）
+if [ -f "$PROJECT_DIR/.env" ]; then
+    set -a; . "$PROJECT_DIR/.env"; set +a
+fi
+OLLAMA_URL="${OLLAMA_URL:-http://127.0.0.1:11434/api/chat}"
+OLLAMA_BASE="${OLLAMA_URL%/api/chat}"
 
 MAX_RETRIES=5
 RETRY_COUNT=0
@@ -22,8 +28,8 @@ while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] 训练启动 (第 $((RETRY_COUNT+1)) 次)"
 
     # 释放 ollama 显存
-    curl -s "$OLLAMA_URL/api/generate" -d '{"model":"qwen3:14b","keep_alive":0}' >/dev/null 2>&1 || true
-    curl -s "$OLLAMA_URL/api/generate" -d '{"model":"deepseek-r1:32b","keep_alive":0}' >/dev/null 2>&1 || true
+    curl -s "$OLLAMA_BASE/api/generate" -d "{\"model\":\"${OLLAMA_GENERATION_MODEL:-qwen3.8:27b}\",\"keep_alive\":0}" >/dev/null 2>&1 || true
+    curl -s "$OLLAMA_BASE/api/generate" -d "{\"model\":\"${OLLAMA_REASONING_MODEL:-qwen3.8:27b}\",\"keep_alive\":0}" >/dev/null 2>&1 || true
     sleep 3
 
     # 检查 GPU 显存
