@@ -41,7 +41,12 @@ model, tokenizer = FastLanguageModel.from_pretrained(
     max_seq_length=MAX_SEQ_LENGTH,
     load_in_4bit=True,
     local_files_only=True,
+    device_map="cpu",  # CPU 加载规避 24GB 显存加载峰值 OOM（Qwen3.8-27B 需 ~43GB 峰值）
 )
+model.to("cuda")
+# 多模态模型的 tokenizer 实为 Qwen3VLProcessor，训练需底层 LLM tokenizer
+if hasattr(tokenizer, "tokenizer"):
+    tokenizer = tokenizer.tokenizer
 
 # ============================================================
 # 2. 配置 LoRA
