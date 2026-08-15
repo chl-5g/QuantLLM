@@ -131,8 +131,9 @@ if len(unique_sources) > 1:
         )
     except ValueError:
         # 稀有数据源（过滤后可能 <2 条）导致分层抽样失败，降级随机拆分
+        # （不删 source 列，主流程统一 remove_columns）
         print("   分层抽样失败（稀有数据源样本过少），降级为随机拆分")
-        split = full_dataset.remove_columns("source").train_test_split(
+        split = full_dataset.train_test_split(
             test_size=EVAL_RATIO, seed=SEED
         )
 else:
