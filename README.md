@@ -2,7 +2,7 @@
 
 > **⚠️ 本项目仅供研究与教育用途，不构成投资建议。**
 
-基于 Qwen2.5-14B 微调 + LangGraph 多 Agent 工作流的 A 股量化交易系统。参考 [ai-hedge-fund](https://github.com/virattt/ai-hedge-fund) 的多分析师协作架构，结合 A 股特有的反转效应（全技术因子 IC 为负）和市场环境感知，覆盖 A 股、商品期货、ETF 基金、可转债四大市场。
+基于 Qwen3.8-27B 微调 + LangGraph 多 Agent 工作流的 A 股量化交易系统。参考 [ai-hedge-fund](https://github.com/virattt/ai-hedge-fund) 的多分析师协作架构，结合 A 股特有的反转效应（全技术因子 IC 为负）和市场环境感知，覆盖 A 股、商品期货、ETF 基金、可转债四大市场。
 
 ## 架构概览
 
@@ -239,7 +239,7 @@ start → [6个分析师并行] → 风控管理 → 组合经理 → 最终决�
 ## 技术栈
 
 - **LangGraph**: 多 Agent 工作流编排
-- **基座模型**: Qwen2.5-14B (4bit 量化)
+- **基座模型**: Qwen3.8-27B (4bit 量化)
 - **微调框架**: Unsloth + TRL SFTTrainer
 - **数据源**: akshare (东方财富 API)、HuggingFace
 - **技术指标**: 28 个自研指标（纯 pandas/numpy）
